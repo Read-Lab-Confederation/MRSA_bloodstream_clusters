@@ -1,0 +1,2077 @@
+
+---
+title: 'Genomics Anamysis of MRSA BSI in Pennsylvania Hospitals'
+output:
+  html_document:
+    df_print: paged
+---
+
+# Bringing In Data
+
+## Set-Up
+
+```{r}
+library(tidyverse)
+
+#For Phylogenetics and Robinson-Foulds analysis
+library(ggtree)
+library(ape)
+library(treeio)
+library(grid)
+
+#Functions
+get_sampleID <- function(svec,numb) {
+  rev_namub = as.numeric(numb)
+  return(svec[rev_namub])
+}
+
+
+t_col <- function(color, percent = 50, name = NULL) {
+  #      color = color name
+  #    percent = % transparency
+  #       name = an optional name for the color
+
+## Get RGB values for named color
+rgb.val <- col2rgb(color)
+
+## Make new color using input color as base and alpha set by transparency
+t.col <- rgb(rgb.val[1], rgb.val[2], rgb.val[3],
+             max = 255,
+             alpha = (100 - percent) * 255 / 100,
+             names = name)
+
+## Save the color
+invisible(t.col)
+}
+
+
+```
+
+## Metadata
+```{r}
+
+### Raw metadata includes: 
+# 1. 
+# 2. 
+# 3. 
+
+load("githubRawMetadata.RData")
+
+#Index table linking various isolate IDs 
+
+SEMAPHORE_isolates <- read.csv("~/tiramisu/OneDrive/BREGOS_1/SEMAPHORE_isolates_submitted_standardized - 1-44.csv", header = TRUE) %>% rename(SAB_ID = comments)
+SEMAPHORE_isolates$SAB_ID <- str_remove(SEMAPHORE_isolates$SAB_ID, "BREGOS, ")
+
+index <- bacteremia %>% select(name,sample_id,SubjectID2) %>% mutate(samplefna = paste("sample-",sample_id, sep = ""))
+index$samplefna <- paste(index$samplefna,".fna", sep = "")
+index <- index %>% mutate(semaphorefile = gsub("[<>.]", "_", index$name))
+index <- left_join(index, SEMAPHORE_isolates, by = c("SubjectID2" = "subject_id")) %>% select(name, sample_id, SubjectID2,samplefna, semaphorefile, SAB_ID)
+
+#Patient-level data
+Epitable <- readxl::read_xlsx("~/tiramisu/OneDrive/BREGOS_1/BREGOGS_DemogOutcome_05.27.2021.xlsx")
+
+#Isolate MICs
+MICs <- readxl::read_xlsx("~/tiramisu/OneDrive/BREGOS_1/BREGOS_DemogSensies_106_07.22.2021.xlsx") 
+MICs <- left_join(MICs, index, by = c(`Subject ID` = "SAB_ID")) %>% select(sample_id,name, `Subject ID`, 6:25)
+MICs <- MICs %>% filter(!is.na(name)) %>% filter(!(sample_id %in% "45732")) %>% as.data.frame()
+
+#Joined metadata table
+bacteremia_st0 <- left_join(bacteremia,st_cc, by = "st")
+bacteremia_st <- left_join(bacteremia_st0,Epitable, by = c("SubjectID2" = "LabVantage ID"))
+
+##Specifying specific Clonal Clusters
+
+CC5_genomes <- bacteremia_st %>% 
+  filter(!grepl("CC8",label)) %>%
+  filter(!grepl("CC72",label)) %>%
+  filter(USA300 == 0) %>%
+  filter(!grepl("CC30",label)) %>%
+  filter(!grepl("CC78",label)) %>%
+  .$sample_id
+CC5_genomes
+
+CC8_genomes <- bacteremia_st %>%
+  filter(!grepl("CC30",label)) %>%
+  filter(!grepl("CC78",label)) %>%
+  filter(!(sample_id %in% CC5_genomes)) %>%
+  filter(!(sample_id %in% c(45732,45728,45726,45687,45685,45802))) %>%
+  .$sample_id
+
+#Subset for comparing the date differences between clusters 
+times <- bacteremia_st %>% select(name, time_collected)
+
+#random abberation in raw R data
+rm(totalhist)
+
+```
+
+# 104 Alignment Analyses
+
+##  Raw Phylogenetic Trees
+
+```{r}
+
+########## SNIPPY ############
+
+trsnip104 <- read.tree(file="~/tiramisu/working_folder/BREGOS_Snippy/trees/core104aln.treefile")
+trsnip104<- trsnip104 %>% drop.tip("Reference")
+
+########## PARSNP ##############
+trparsnp104 <- read.tree(file="~/tiramisu/working_folder/BREGOS_parsnp/Parsnp104/parsnp.tree")
+trparsnp104<- trparsnp104 %>% drop.tip("GCA_000009645.1_ASM964v1_genomic.fna.ref")
+
+trparsnp104_iq <- read.tree(file="~/tiramisu/working_folder/BREGOS_parsnp/parsnp104aln.treefile")
+trparsnp104_iq <- trparsnp104_iq %>% drop.tip("GCA_000009645.1_ASM964v1_genomic.fna.ref")
+
+########## PIRATE ###############
+
+trpir104 <- read.tree(file="~/tiramisu/working_folder/BREGOS_pirate/bactopia-tools/pirate/core-genome/iqtree/core-genome.treefile")
+```
+
+
+## SNP Matrices
+
+```{r}
+
+########## SNIPPY ###############
+
+#Data here are the matrices produced after running all 104 isolates through the snippy alignment tool
+total.snippy.matrix <- as.matrix(read.delim("~/tiramisu/working_folder/BREGOS_Snippy/core104.aln.matrix", row.names=1))
+total.snippy.matrix <- total.snippy.matrix[-1,-1]
+colnames(total.snippy.matrix) <- gsub("[^0-9]","",(colnames(total.snippy.matrix)[1:104]))
+row.names(total.snippy.matrix) <- gsub("[^0-9]","",(row.names(total.snippy.matrix)[1:104]))
+
+########## PARSNP ###############
+
+total.parsnp.matrix <- as.matrix(read.delim("~/tiramisu/working_folder/BREGOS_parsnp/parsnp104mat.matrix", row.names=1))
+total.parsnp.matrix <- total.parsnp.matrix[-1,-1]
+colnames(total.parsnp.matrix) <- gsub("[^0-9]","",(colnames(total.parsnp.matrix)[1:104]))
+row.names(total.parsnp.matrix) <- gsub("[^0-9]","",(row.names(total.parsnp.matrix)[1:104]))
+
+########## PIRATE ###############
+
+total.pirate.matrix <- as.matrix(read.delim("~/tiramisu/working_folder/BREGOS_pirate/bactopia-tools/pirate/core-genome/core-genome.distance.txt",row.names=1))
+total.pirate.vals <-total.pirate.matrix[lower.tri(total.pirate.matrix)]
+
+total.pirate.hist <- hist(total.pirate.vals)
+
+
+```
+
+## Cophenetic Distance Comparison
+
+```{r}
+
+############
+#Assessing tree and Matrix qualities:
+
+######## SNIPPY ##########
+
+#Plotting the total Snippy tree
+
+snip104_disvec <- as.vector(as.dist(total.snippy.matrix))
+snip104_treevec <- as.data.frame(as.matrix(as.dist(cophenetic.phylo(trsnip104)))) %>% select(sort(names(.)))
+snip104_treevec <- snip104_treevec[order(rownames(snip104_treevec)),] 
+snip104_treevec <- as.vector(as.dist(snip104_treevec))
+
+plot(snip104_disvec, snip104_treevec, xlab="original pairwise distances", ylab="pairwise distances on the tree", main="Is Snippy Total Appropriate?", pch=20,  cex=3)
+#abline(lm( snip104_disvec~snip104_treevec,), col="red")
+cor(snip104_disvec,snip104_treevec)^2
+
+
+####### PARSNP #########
+
+# Plotting the total Parsnp vector
+
+total.parsnp.matrix <- as.data.frame(total.parsnp.matrix ) %>% select(sort(names(.)))
+total.parsnp.matrix  <- total.parsnp.matrix[order(rownames(total.parsnp.matrix)),] 
+
+parsnp104_disvec <- as.vector(as.dist(total.parsnp.matrix))
+parsnp104_treevec <- as.data.frame(as.matrix(as.dist(cophenetic.phylo(trparsnp104)))) %>% select(sort(names(.)))
+parsnp104_treevec <- parsnp104_treevec[order(rownames(parsnp104_treevec)),] 
+parsnp104tr <- as.vector(as.dist(parsnp104_treevec))
+
+plot(parsnp104_disvec, parsnp104tr, xlab="original pairwise distances", ylab="pairwise distances on the tree", main="Is Parsnp Total Appropriate?", pch=20,  cex=3)
+#abline(lm( parsnp104_disvec~parsnp104tr,), col="red")
+cor(parsnp104_disvec,parsnp104tr)^2
+
+
+parsnp104_disvec <- as.vector(as.dist(total.parsnp.matrix))
+parsnp104iq_treevec <- as.data.frame(as.matrix(as.dist(cophenetic.phylo(trparsnp104_iq)))) %>% select(sort(names(.)))
+parsnp104iq_treevec <- parsnp104iq_treevec[order(rownames(parsnp104iq_treevec)),] 
+parsnp104triq <- as.vector(as.dist(parsnp104iq_treevec))
+
+plot(parsnp104_disvec, parsnp104triq, xlab="original pairwise distances", ylab="pairwise distances on the tree", main="Is Parsnp Total Appropriate?", pch=20,  cex=3)
+#abline(lm( parsnp104_disvec~parsnp104tr,), col="red")
+cor(parsnp104_disvec,parsnp104triq)^2
+
+
+####### PIRATE ##########
+
+pir104_disvec <- as.vector(as.dist(total.pirate.matrix))
+pir104_treevec <- as.data.frame(as.matrix(as.dist(cophenetic.phylo(trpir104)))) %>% select(sort(names(.)))
+pir104_treevec <- pir104_treevec[order(rownames(pir104_treevec)),] 
+pir104_treevec <- as.vector(as.dist(pir104_treevec))
+
+plot(pir104_disvec, pir104_treevec, xlab="original pairwise distances", ylab="pairwise distances on the tree", main="Is Total Pirate Alignment Appropriate?", pch=20,  cex=3)
+abline(lm(pir104_disvec~pir104_treevec), col="red")
+cor(pir104_disvec,pir104_treevec)^2
+
+
+```
+
+
+## Robinson-Foulds analysis
+
+```{r}
+
+Bacteremia_genomes <- as.vector(bacteremia_st$sample_id)
+Bacteremia_genomes <- Bacteremia_genomes[-5]
+
+#Generated random tree for comparison
+random104 <- rtree(n = 104, tip.label = Bacteremia_genomes, rooted = FALSE) 
+
+##### ALL TREES #######
+
+RFtrpir104 = rename_taxa(trpir104, index, key = semaphorefile, value = sample_id)
+RFtrsnip104 = rename_taxa(trsnip104, index, key = samplefna, value = sample_id)
+RFtrsnip104 <- unroot(RFtrsnip104)
+RFtrparsnp104 = rename_taxa(trparsnp104, index, key = samplefna, value = sample_id)
+RFtrparsnp104 <- unroot(RFtrparsnp104)
+
+plot.phylo(RFtrpir104, show.tip.label = TRUE)
+plot.phylo(RFtrsnip104, show.tip.label = TRUE)
+plot.phylo(RFtrparsnp104, show.tip.label = TRUE)
+
+dist.topo(RFtrsnip104, RFtrpir104, method = 'PH85')
+dist.topo(RFtrsnip104, RFtrparsnp104, method = 'PH85')
+dist.topo(RFtrpir104, RFtrparsnp104, method = 'PH85')
+dist.topo(RFtrpir104, random104, method = 'PH85')
+dist.topo(RFtrparsnp104, random104, method = 'PH85')
+dist.topo(RFtrsnip104, random104, method = 'PH85')
+
+```
+
+
+## Cluster assignments and Histograms
+
+```{r}
+
+#### ID References ### 
+
+CC5_FNA_IDs <- as.data.frame(CC5_genomes)
+colnames(CC5_FNA_IDs) <- "sample_id"
+CC5_FNA_IDs$sample_id <- as.character(CC5_FNA_IDs$sample_id)
+CC8_FNA_IDs <- as.data.frame(CC8_genomes)
+colnames(CC8_FNA_IDs) <- "sample_id"
+CC8_FNA_IDs$sample_id <- as.character(CC8_FNA_IDs$sample_id)
+
+CC5_SEMAPHORE_IDs <- bacteremia %>% filter(sample_id %in% CC5_genomes) %>% select(SampleID) %>% as.vector()
+CC5_SEMAPHORE_IDs$SampleID <- str_replace_all(CC5_SEMAPHORE_IDs$SampleID, "-","_")
+CC8_SEMAPHORE_IDs <- bacteremia %>% filter(sample_id %in% CC8_genomes) %>% select(SampleID)
+CC8_SEMAPHORE_IDs$SampleID <- str_replace_all(CC8_SEMAPHORE_IDs$SampleID, "-","_")
+
+######### ALL CCs ##########
+
+ALL.snippy.matrix <- as.data.frame(total.snippy.matrix) %>% select(sort(names(.)))
+
+ALL.snippy.sample.names <- as.data.frame(colnames(ALL.snippy.matrix[1:104]))
+colnames(ALL.snippy.sample.names) <- "sample_id" 
+ALL.snippy.sample.names$sample_id <- as.integer(ALL.snippy.sample.names$sample_id)
+
+ALL.snippy_sample_IDs <- as.character(inner_join(ALL.snippy.sample.names,index,by = c("sample_id" = "sample_id")) %>% .$sample)
+
+library(reshape2)
+Relatives_35_ALL_snippy <- melt(total.snippy.matrix) %>% filter(value <35) %>% filter(Var1 != Var2 ) %>%
+   mutate(strain1 = ifelse(Var1 > Var2, Var2, Var1)) %>%
+   mutate(strain2 = ifelse(Var1 > Var2, Var1, Var2)) %>%
+   select(strain1, strain2, value) %>%
+   unique() %>%
+   left_join(index, by = c("strain1" = "sample_id")) %>%
+   left_join(index, by = c("strain2" = "sample_id")) %>%
+   select(name.x, name.y, value) %>%
+      left_join(times, by = c("name.x" = "name")) %>%
+   left_join(times, by = c("name.y" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2))) %>% dplyr::rename(strain1 = name.x, strain2 = name.y, SNPdist = value)
+
+
+melted_snippy <- melt(total.snippy.matrix) %>% filter(Var1 != Var2 ) %>%
+   mutate(strain1 = ifelse(Var1 > Var2, Var2, Var1)) %>%
+   mutate(strain2 = ifelse(Var1 > Var2, Var1, Var2)) %>%
+   select(strain1, strain2, value) %>%
+   unique() %>%
+   left_join(index, by = c("strain1" = "sample_id")) %>%
+   left_join(index, by = c("strain2" = "sample_id")) %>%
+   select(name.x, name.y, value) %>%
+      left_join(times, by = c("name.x" = "name")) %>%
+   left_join(times, by = c("name.y" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2))) %>%
+   dplyr::rename(Strain1 = name.x, Strain2 = name.y, SNPdist = value)
+   
+
+# #Relatives_35_ALL_snippy <- as.data.frame(which(total.snippy.matrix < 35,arr.ind=TRUE)) %>%
+#    filter(row != col) %>%
+#    mutate(row2 = ifelse(row > col,col, row)) %>%
+#    mutate(col2 = ifelse(row > col,row, col)) %>%
+#    select(row2,col2) %>%
+#   mutate(strain1 = get_sampleID(ALL.snippy_sample_IDs,row2)) %>%
+#   mutate(strain2 = get_sampleID(ALL.snippy_sample_IDs,col2)) %>%
+# select(strain1,strain2) %>%
+# unique() %>% 
+#    left_join(times, by = c("strain1" = "name")) %>%
+#    left_join(times, by = c("strain2" = "name")) %>%
+#    mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+#    mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+#    mutate(datediff = as.numeric(abs(time1-time2)))
+
+CLUSTERS_snippy <- left_join(Relatives_35_ALL_snippy, bacteremia_meta, by = c("strain1" = "name"))
+
+
+ALL.parsnp.matrix <- as.data.frame(total.parsnp.matrix)
+
+#%>% select(sort(names(.)))
+
+ALL.parsnp.sample.names <- as.data.frame(colnames(ALL.parsnp.matrix[1:104]))
+colnames(ALL.parsnp.sample.names) <- "sample_id" 
+ALL.parsnp.sample.names$sample_id <- as.integer(ALL.parsnp.sample.names$sample_id)
+
+ALL.parsnp_sample_IDs <- as.character(inner_join(ALL.parsnp.sample.names,index,by = c("sample_id" = "sample_id")) %>% .$name)
+
+melted_parsnp <- melt(total.parsnp.matrix) %>% filter(Var1 != Var2 ) %>%
+   mutate(strain1 = ifelse(Var1 > Var2, Var2, Var1)) %>%
+   mutate(strain2 = ifelse(Var1 > Var2, Var1, Var2)) %>%
+   select(strain1, strain2, value) %>%
+   unique() %>%
+   left_join(index, by = c("strain1" = "sample_id")) %>%
+   left_join(index, by = c("strain2" = "sample_id")) %>%
+   select(name.x, name.y, value) %>%
+      left_join(times, by = c("name.x" = "name")) %>%
+   left_join(times, by = c("name.y" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2))) %>%
+   dplyr::rename(Strain1 = name.x, Strain2 = name.y, SNPdist = value)
+
+Relatives_35_ALL_parsnp <- melt(total.parsnp.matrix) %>% filter(value <35) %>% filter(Var1 != Var2 ) %>%
+   mutate(strain1 = ifelse(Var1 > Var2, Var2, Var1)) %>%
+   mutate(strain2 = ifelse(Var1 > Var2, Var1, Var2)) %>%
+   select(strain1, strain2, value) %>%
+   unique() %>%
+   left_join(index, by = c("strain1" = "sample_id")) %>%
+   left_join(index, by = c("strain2" = "sample_id")) %>%
+   select(name.x, name.y, value) %>%
+      left_join(times, by = c("name.x" = "name")) %>%
+   left_join(times, by = c("name.y" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2))) %>%
+   dplyr::rename(Strain1 = name.x, Strain2 = name.y, SNPdist = value)
+
+
+# Relatives_35_ALL_parsnp <- as.data.frame(which(total.parsnp.matrix < 35,arr.ind=TRUE)) %>%
+#    filter(row != col) %>%
+#    mutate(row2 = ifelse(row > col,col, row)) %>%
+#    mutate(col2 = ifelse(row > col,row, col)) %>%
+#    select(row2,col2) %>%
+#   mutate(strain1 = get_sampleID(ALL.parsnp_sample_IDs,row2)) %>%
+#   mutate(strain2 = get_sampleID(ALL.parsnp_sample_IDs,col2)) %>%
+# select(strain1,strain2) %>%
+# unique() %>% 
+#    left_join(times, by = c("strain1" = "name")) %>%
+#    left_join(times, by = c("strain2" = "name")) %>%
+#    mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+#    mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+#    mutate(datediff = as.numeric(abs(time1-time2)))
+
+CLUSTERS_parsnp <- left_join(Relatives_35_ALL_parsnp, bacteremia_meta, by = c("Strain1" = "name"))
+
+
+
+ALL.pirate.matrix <- as.data.frame(total.pirate.matrix) %>% select(sort(names(.)))
+
+ALL.pirate.sample.names <- as.data.frame(colnames(ALL.pirate.matrix[1:104]))
+colnames(ALL.pirate.sample.names) <- "sample_id" 
+
+ALL.pirate_sample_IDs <- as.character(inner_join(ALL.pirate.sample.names,index,by = c("sample_id" = "semaphorefile")) %>% .$name)
+
+
+melted_pirate <- melt(total.pirate.matrix) %>% filter(Var1 != Var2 ) %>%
+      left_join(index, by = c("Var1" = "semaphorefile")) %>%
+   left_join(index, by = c("Var2" = "semaphorefile")) %>%
+   mutate(strain1 = ifelse(sample_id.x > sample_id.y, sample_id.y, sample_id.x)) %>%
+   mutate(strain2 = ifelse(sample_id.x > sample_id.y, sample_id.x, sample_id.y)) %>%
+   select(strain1, strain2, value) %>%
+   unique() %>%
+   left_join(index, by = c("strain1" = "sample_id")) %>%
+   left_join(index, by = c("strain2" = "sample_id")) %>%
+   select(name.x, name.y, value) %>%
+      left_join(times, by = c("name.x" = "name")) %>%
+   left_join(times, by = c("name.y" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2))) %>%
+   dplyr::rename(Strain1 = name.x, Strain2 = name.y, SNPdist = value)
+
+Relatives_35_ALL_pirate  <- melt(total.pirate.matrix) %>% filter(value <35) %>% filter(Var1 != Var2 ) %>%
+      left_join(index, by = c("Var1" = "semaphorefile")) %>%
+   left_join(index, by = c("Var2" = "semaphorefile")) %>%
+   mutate(strain1 = ifelse(sample_id.x > sample_id.y, sample_id.y, sample_id.x)) %>%
+   mutate(strain2 = ifelse(sample_id.x > sample_id.y, sample_id.x, sample_id.y)) %>%
+   select(strain1, strain2, value) %>%
+   unique() %>%
+   left_join(index, by = c("strain1" = "sample_id")) %>%
+   left_join(index, by = c("strain2" = "sample_id")) %>%
+   select(name.x, name.y, value) %>%
+      left_join(times, by = c("name.x" = "name")) %>%
+   left_join(times, by = c("name.y" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2))) %>%
+   dplyr::rename(Strain1 = name.x, Strain2 = name.y, SNPdist = value) %>% 
+   left_join(bacteremia_st, by = c("Strain1" = "name")) %>%
+   left_join(bacteremia_st, by = c("Strain2" = "name")) %>%
+            select(Strain1, Strain2, SNPdist, time1, time2, datediff, Hospital.x, Hospital.y, 'BSI Source.x', 'BSI Source.y')    
+
+
+
+# Relatives_35_ALL_pirate <- as.data.frame(which(total.pirate.matrix < 35,arr.ind=TRUE)) %>%
+#    filter(row != col) %>%
+#    mutate(row2 = ifelse(row > col,col, row)) %>%
+#    mutate(col2 = ifelse(row > col,row, col)) %>%
+#    select(row2,col2) %>%
+#   mutate(strain1 = get_sampleID(ALL.parsnp_sample_IDs,row2)) %>%
+#   mutate(strain2 = get_sampleID(ALL.parsnp_sample_IDs,col2)) %>%
+# select(strain1,strain2) %>%
+# unique() %>% 
+#    left_join(times, by = c("strain1" = "name")) %>%
+#    left_join(times, by = c("strain2" = "name")) %>%
+#    mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+#    mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+#    mutate(datediff = as.numeric(abs(time1-time2)))
+
+CLUSTERS_pirate <- left_join(Relatives_35_ALL_pirate, bacteremia_meta, by = c("Strain1" = "name"))
+
+
+
+getwd()
+write.csv(CLUSTERS_snippy, "/mnt/tiramisu/homes/bmtalbo-1000022/OneDrive/BREGOS_1/CLUSTERS_snippy.csv")
+write.csv(CLUSTERS_parsnp, "/mnt/tiramisu/homes/bmtalbo-1000022/OneDrive/BREGOS_1/CLUSERS_parsnp.csv")
+write.csv(CLUSTERS_pirate, "/mnt/tiramisu/homes/bmtalbo-1000022/OneDrive/BREGOS_1/CLUSERS_pirate.csv")
+
+
+heatmap(total.parsnp.matrix)
+
+
+######## SNIPPY ###########
+
+## CC8 Group
+#Reordering the matrix for the lower tri
+total_to_CC8.snippy.matrix <- as.data.frame(total.snippy.matrix) %>% select(CC8_FNA_IDs$sample_id) %>% select(sort(names(.))) %>% filter(row.names(total.snippy.matrix) %in% CC8_FNA_IDs$sample_id)
+
+total_to_CC8.snippy.vals <- total_to_CC8.snippy.matrix[lower.tri(total_to_CC8.snippy.matrix)]
+
+total_to_CC8.snippy.sample.names <- as.data.frame(colnames(total_to_CC8.snippy.matrix[1:55]))
+colnames(total_to_CC8.snippy.sample.names) <- "sample_id" 
+
+index$sample_id <- as.character(index$sample_id)
+total_to_CC8.snippy_sample_IDs <- as.character(inner_join(total_to_CC8.snippy.sample.names,index,by = c("sample_id" = "sample_id")) %>% .$name)
+
+Relatives_35_total_to_CC8_snippy <- as.data.frame(which(total_to_CC8.snippy.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC8.snippy_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC8.snippy_sample_IDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+Relatives_15_total_to_CC8_snippy <- as.data.frame(which(total_to_CC8.snippy.matrix < 15,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC8.snippy_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC8.snippy_sample_IDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+
+## CC5 Group
+#Reordering the matrix for the lower tri
+total_to_CC5.snippy.matrix <- as.data.frame(total.snippy.matrix) %>% select(CC5_FNA_IDs$sample_id) %>% select(sort(names(.))) %>% filter(row.names(total.snippy.matrix) %in% CC5_FNA_IDs$sample_id)
+
+total_to_CC5.snippy.vals <- total_to_CC5.snippy.matrix[lower.tri(total_to_CC5.snippy.matrix)]
+
+total_to_CC5.snippy.sample.names <- as.data.frame(colnames(total_to_CC5.snippy.matrix[1:40]))
+colnames(total_to_CC5.snippy.sample.names) <- "sample_id" 
+
+index$sample_id <- as.character(index$sample_id)
+total_to_CC5.snippy_sample_IDs <- as.character(inner_join(total_to_CC5.snippy.sample.names,index,by = c("sample_id" = "sample_id")) %>% .$name)
+
+Relatives_35_total_to_CC5_snippy <- as.data.frame(which(total_to_CC5.snippy.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC5.snippy_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC5.snippy_sample_IDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+Relatives_15_total_to_CC5_snippy <- as.data.frame(which(total_to_CC5.snippy.matrix < 15,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC5.snippy_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC5.snippy_sample_IDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+ 
+####### PARSNP ###########
+
+## CC5 Group
+#Reordering the matrix
+total_to_CC5.parsnip.matrix <- as.data.frame(total.parsnp.matrix) %>% select(CC5_FNA_IDs$sample_id) %>% select(sort(names(.))) %>% filter(row.names(total.parsnp.matrix) %in% CC5_FNA_IDs$sample_id)
+total_to_CC5.parsnip.matrix  <- total_to_CC5.parsnip.matrix[order(row.names(total_to_CC5.parsnip.matrix)),]
+
+total_to_CC5.parsnip.vals <- total_to_CC5.parsnip.matrix[lower.tri(total_to_CC5.parsnip.matrix)]
+
+total_to_CC5.parsnip.matrix.sample_names <- as.data.frame(as.numeric(row.names(total_to_CC5.parsnip.matrix)))
+colnames(total_to_CC5.parsnip.matrix.sample_names) <- "sample_id"
+
+total_to_CC5.parsnip.matrix.sample_names$sample_id <- as.character(total_to_CC5.parsnip.matrix.sample_names$sample_id)
+
+total_to_CC5.parsnp_sample_IDs <- as.character(inner_join(total_to_CC5.parsnip.matrix.sample_names,index,by = c("sample_id" = "sample_id")) %>% .$name )
+
+
+Relatives_35_total_to_CC5_parsnp <- as.data.frame(which(total_to_CC5.parsnip.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC5.parsnp_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC5.parsnp_sample_IDs,col2)) %>%
+   select(strain1,strain2) %>%
+      unique() %>%
+      left_join(times, by = c("strain1" = "name")) %>%
+      left_join(times, by = c("strain2" = "name")) %>%
+      mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+      mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+      mutate(datediff = as.numeric(abs(time1-time2)))
+
+Relatives_15_total_to_CC5_parsnp <- as.data.frame(which(total_to_CC5.parsnip.matrix < 15,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC5.parsnp_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC5.parsnp_sample_IDs,col2)) %>%
+   select(strain1,strain2) %>%
+      unique() %>%
+      left_join(times, by = c("strain1" = "name")) %>%
+      left_join(times, by = c("strain2" = "name")) %>%
+      mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+      mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+      mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+ ## Total CC8 
+ 
+#Reordering the matrix
+total_to_CC8.parsnip.matrix <- as.data.frame(total.parsnp.matrix) %>% select(CC8_FNA_IDs$sample_id) %>% select(sort(names(.))) %>% filter(row.names(total.parsnp.matrix) %in% CC8_FNA_IDs$sample_id)
+total_to_CC8.parsnip.matrix  <- total_to_CC8.parsnip.matrix[order(row.names(total_to_CC8.parsnip.matrix)),]
+
+total_to_CC8.parsnip.vals <- total_to_CC8.parsnip.matrix[lower.tri(total_to_CC8.parsnip.matrix)]
+
+total_to_CC8.parsnip.matrix.sample_names <- as.data.frame(as.character(row.names(total_to_CC8.parsnip.matrix)))
+colnames(total_to_CC8.parsnip.matrix.sample_names) <- "sample_id"
+
+total_to_CC8.parsnp_sample_IDs <- as.character(inner_join(total_to_CC8.parsnip.matrix.sample_names,index,by = c("sample_id" = "sample_id")) %>% .$name )
+
+
+Relatives_35_total_to_CC8_parsnp <- as.data.frame(which(total_to_CC8.parsnip.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC8.parsnp_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC8.parsnp_sample_IDs,col2)) %>%
+   select(strain1,strain2) %>%
+      unique() %>%
+      left_join(times, by = c("strain1" = "name")) %>%
+      left_join(times, by = c("strain2" = "name")) %>%
+      mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+      mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+      mutate(datediff = as.numeric(abs(time1-time2)))
+
+Relatives_15_total_to_CC8_parsnp <- as.data.frame(which(total_to_CC8.parsnip.matrix < 15,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC8.parsnp_sample_IDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC8.parsnp_sample_IDs,col2)) %>%
+   select(strain1,strain2) %>%
+      unique() %>%
+      left_join(times, by = c("strain1" = "name")) %>%
+      left_join(times, by = c("strain2" = "name")) %>%
+      mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+      mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+      mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+
+####### PIRATE ###########
+
+## CC8 Group 
+
+#Reordering the matrix for the lower tri
+total_to_CC8.pirate.matrix <- as.data.frame(total.pirate.matrix) %>% select(CC8_SEMAPHORE_IDs$SampleID) %>% select(sort(names(.))) %>% filter(row.names(total.pirate.matrix) %in% CC8_SEMAPHORE_IDs$SampleID)
+
+as.matrix(total_to_CC8.pirate.matrix)
+
+total_to_CC8.pirate.vals <- total_to_CC8.pirate.matrix[lower.tri(total_to_CC8.pirate.matrix)]
+
+#total_to_CC8.pirate.hist <- hist(total_to_CC8.vals, breaks = seq(0,600,5),ylim =c(0,100), xlim =c(0,600),  main = "Frequency of Pairwise SNP Distances among CC8 Bacteremia Sequences processed by Pirate", xlab = "SNP Distances", ylab="Frequency of Pairs")
+#abline(v=35, col="red") + axis(1, at=seq(0,900,100))
+#text(40.4,20.2,"35 SNP threshold", pos = 4, col = "red", cex = 0.8)
+
+
+total_to_CC8.sample_names <- as.data.frame(gsub("_",".",(colnames(total_to_CC8.pirate.matrix)[1:55])))
+colnames(total_to_CC8.sample_names) <- "sample_id"
+
+total_to_CC8_pirIDs <- as.character(inner_join(total_to_CC8.sample_names,index,by = c("sample_id" = "name")) %>% .$sample_id)
+
+#Datatable that has pairs under the threshold 
+Relatives_35_total_to_CC8_pir <- as.data.frame(which(total_to_CC8.pirate.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC8_pirIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC8_pirIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>%
+         left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+Relatives_15_total_to_CC8_pir <- as.data.frame(which(total_to_CC8.pirate.matrix < 15,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC8_pirIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC8_pirIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>%
+         left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+## CC5 Group
+#Reordering the matrix for the lower tri
+total_to_CC5.pirate.matrix <- as.data.frame(total.pirate.matrix) %>% select(CC5_SEMAPHORE_IDs$SampleID) %>% select(sort(names(.))) %>% filter(row.names(total.pirate.matrix) %in% CC5_SEMAPHORE_IDs$SampleID)
+
+as.matrix(total_to_CC5.pirate.matrix)
+
+total_to_CC5.pirate.vals <- total_to_CC5.pirate.matrix[lower.tri(total_to_CC5.pirate.matrix)]
+
+#total_to_CC5.pirate.hist <- hist(total_to_CC8.vals, breaks = seq(0,600,5),ylim =c(0,100), xlim =c(0,600),  main = "Frequency of Pairwise SNP Distances among CC8 Bacteremia Sequences processed by Pirate", xlab = "SNP Distances", ylab="Frequency of Pairs")
+#abline(v=35, col="red") + axis(1, at=seq(0,900,100))
+#text(40.4,20.2,"35 SNP threshold", pos = 4, col = "red", cex = 0.8)
+
+
+total_to_CC5.sample_names <- as.data.frame(gsub("_",".",(colnames(total_to_CC5.pirate.matrix)[1:40])))
+colnames(total_to_CC5.sample_names) <- "sample_id"
+
+total_to_CC5_pirIDs <- as.character(inner_join(total_to_CC5.sample_names,index,by = c("sample_id" = "name")) %>% .$sample_id)
+
+#Datatable that has pairs under the threshold 
+Relatives_35_total_to_CC5_pir <- as.data.frame(which(total_to_CC5.pirate.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC5_pirIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC5_pirIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>%
+         left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+Relatives_15_total_to_CC5_pir <- as.data.frame(which(total_to_CC5.pirate.matrix < 15,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(total_to_CC5_pirIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(total_to_CC5_pirIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>%
+         left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+
+```
+
+## Tree Plots 
+
+```{r}
+
+#May need to create these trees from the subset matrices later before creating these, or you subset from the 104 isolates tree and create the heatmaps from there; Which seems a little more reasonable and true to the analysis
+
+
+bacteremia_meta <- bacteremia_st0[,c(7,1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22)] %>% mutate(ClonalCluster = case_when(sample_id %in% CC5_genomes ~ "CC5", sample_id %in% CC8_genomes ~ "CC8", TRUE ~ label)) %>% select(-label)
+
+rownames(bacteremia_meta) <- bacteremia_meta[,1] #Assigning row names from 1st column 
+#bacteremia_meta[,1] <- NULL #Removing the first column
+
+trpir104 = rename_taxa(trpir104, index, key = semaphorefile, value = name)
+
+tr104 <- phytools::midpoint.root(trpir104)
+
+t <- rename_taxa(tr104, index, key = name, value = sample_id)
+
+### Labelled CCs ###
+
+
+tr104_met <- ggtree(t, right = TRUE) %<+% bacteremia_meta
+   
+Context <- tr104_met + geom_tippoint(aes(color=ClonalCluster)) + scale_color_brewer(palette = 'Dark2', na.value = "grey48", labels=c("CC30", "CC5", "CC72","CC78","CC8","Novel")) + geom_treescale( x=0, y=70) + labs("Clonal Cluster") +
+  geom_point(data = tr104_met[["data"]] %>% dplyr::filter(node %in% c(105,106, 107, 108)), aes(x = x , y = y ), colour = '#fc0303', size = 1)
+ 
+
+Context
+
+
+#Identifying the nodes from the pirate tree 
+
+ Context + geom_text2(aes(subset=!isTip, label=node))
+
+
+
+
+```
+
+## Subset tree
+```{r}
+
+t <- rename_taxa(tr104, index, key = name, value = sample_id)
+
+getMRCA(t, as.character(CC8_genomes))
+getMRCA(t, as.character(CC5_genomes))
+
+tr104_CC8 <- tree_subset(tr104, node = 109, levels_back = 0)
+Subtree_pir_CC8 <- rename_taxa(tr104_CC8, index, key = name, value = sample_id) %>% ggtree(right = TRUE)
+Subtree_pir_CC8
+
+
+tr104_CC5 <- tree_subset(tr104, node = 168, levels_back = 0)
+
+
+Subtree_pir_CC5 <- rename_taxa(tr104_CC5, index, key = name, value = sample_id) %>% ggtree(right = TRUE)
+Subtree_pir_CC5
+
+
+library(ggtree)
+library(dplyr)
+library(harrietr)
+
+node_support_CC5 <- get_node_support(tr104_CC5) %>% mutate(label = paste(`SH-aLRT`, uBS, sep = "/"))
+node_support_CC5 <- left_join(node_support_CC5,as.data.frame(Subtree_pir_CC5[["data"]][,c(2,7:8)]), by = "node")
+node_support_CC5 <- node_support_CC5 %>% rename(new_x = x.y) %>% rename(new_y = y.y)
+
+node_support_CC8 <- get_node_support(tr104_CC8) %>% mutate(label = paste(`SH-aLRT`, uBS, sep = "/"))
+node_support_CC8 <- left_join(node_support_CC8,as.data.frame(Subtree_pir_CC8[["data"]][,c(2,7:8)]), by = "node")
+node_support_CC8 <- node_support_CC8 %>% rename(new_x = x.y) %>% rename(new_y = y.y)
+
+
+
+
+```
+
+###Metadata
+```{r}
+
+
+#related to Pirate trees
+
+traits <- bacteremia_st %>% select(sample_id, name, SubjectID2, st, USA300, II,IV,meca,Ia,IIa,IVa,IVc,IVd,IVg, "Hospital", "BSI Source", "Death in Hospital") %>% sapply(as.character)
+traits[is.na(traits)] <- " "
+
+#Need to sort out how to create a do loop
+traits2 <-as.data.frame(traits) %>% mutate(USA300 = case_when( USA300 == "1" ~ "USA300", USA300 == "0" ~ "non-USA300")) %>% mutate(Ia = case_when( Ia == TRUE ~ "+", Ia == FALSE ~ "-", Ia ==" " ~ "Ref")) %>%
+mutate(II = case_when( II == TRUE  ~ "+", II == FALSE ~ "-", II ==" "~"Ref")) %>%
+mutate(IIa = case_when( IIa == TRUE ~ "+", IIa == FALSE ~ "-", IIa ==" "~"Ref")) %>%
+mutate(IV = case_when( IV == TRUE ~ "+", IV == FALSE ~ "-", IV ==" "~"Ref")) %>%
+mutate(IVa = case_when( IVa == TRUE ~ "+", IVa == FALSE ~ "-", IVa ==" "~"Ref")) %>%
+mutate(IVc = case_when( IVc == TRUE ~ "+", IVc == FALSE ~ "-", IVc ==" "~"Ref")) %>%
+mutate(IVd = case_when( IVd == TRUE ~ "+", IVd == FALSE ~ "-", IVd ==" "~"Ref")) %>%
+mutate(IVg = case_when( IVg == TRUE ~ "+", IVg == FALSE ~ "-", IVg ==" "~"Ref")) %>%
+mutate(meca = case_when( meca == TRUE ~ "+", meca == FALSE ~ "-", meca ==" "~"Ref")) %>%
+mutate(Cluster35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'C1',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'C2',
+  name %in% c("S.190719.00330", "S.190725.00120") ~ 'C3a',
+  name %in% c("S.190723.00179", "S.190725.00107", "S.190731.00833") ~ 'C3b',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'C4',
+  name %in% c("S.190723.00185") ~ 'C6a',
+  name %in% c("S.190725.00093") ~ 'C6b',
+  name %in% c("S.190723.00174","S.190723.00181","S.190723.00191", "S.190725.00099" ) ~ 'C6c',
+  name %in% c("S.190719.00338", "S.190731.00848") ~ 'C5b',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'C5c',
+  name %in% c("S.190725.00091", "S.190725.00098", "S.190731.00839") ~ 'C7',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'C8', 
+  name %in% c("S.190725.00109", "S.190731.00842") ~ 'C9')) %>%
+mutate(Cluster15 = case_when(  
+  name %in% c("S.190723.00180","S.190719.00326") ~ 'C1b',
+  name %in% c("S.190731.00836") ~ 'C1a',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'C2',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'C5c',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'C8', 
+)) %>%
+  mutate(SCCmec = case_when( Ia == "+" ~ "SCCmecIa", 
+                                              II == "+" | IIa == "+" ~ "SCCmecII",
+                                                IV == "+" | IVa == "+" | IVc =="+" | IVd == "+" | IVg == "+" ~ "SCCmecIV")) %>%
+mutate(deathyn = case_when(`Death in Hospital` == "Yes" ~ "Died", `Death in Hospital` == "No" ~ "Survived"))
+
+MICs$sample_id <- as.character(MICs$sample_id)
+MIC_traits <- left_join(traits2, MICs[,-2], by = c("sample_id" = "sample_id"))
+
+rownames(MIC_traits) <- MIC_traits[,1] #Assigning row names from 1st column 
+MIC_traits[,1] <- NULL #Removing the first column
+
+traits3 <- MIC_traits %>% select(st,SCCmec, USA300,Oxacillin,Vancomycin,Daptomycin,Levofloxacin, Moxifloxacin,Ciprofloxacin, `Trimethoprim/Sulfamethoxazole`, "BSI Source", Hospital, Cluster35, Cluster15) 
+
+#%>% dplyr::rename(Died = deathyn)
+#traits3$Died <- as.factor(traits3$Died)
+traits3$Cluster35 <- as.factor(traits3$Cluster35)
+#traits3$Cluster15 <- as.factor(traits3$Cluster15)
+#traits3$Cluster45 <- as.factor(traits3$Cluster45)
+traits3$SCCmec <- as.factor(traits3$SCCmec)
+
+
+cols1= c("#a8cbf0","#7d93b8","#486699")
+cols2= c("#FF3399","#ffc7e3","#FF3399", "#FFCC00","#d15858","#cf1f1f", "#8de3b2", "#b48ad1","#a154d6","#660fa3","#6ca66d","#427d43","#205221","#311ebd","#b56a00", "#82827a")
+cols3=c("#486699","#e3e5e6")
+cols5= c("#f08271", "#f0bf71", "#f0f071", "#adf08b", "#8bc3f0", "orchid", "#8b8bf0", "#e3e5e6", "brown2")
+cols6= c("#a8cbf0", "#f0bf71")
+cols7 = c("#f08271", "orange", "#8bc3f0", "yellowgreen", "forestgreen", "cadetblue1", "blue", "orchid", "gold","#f0bf71", "brown2")
+colsMIC= c("#2328a8","#9293a6","#6769a3","#e3e5e6")
+names(colsMIC) = c("Resistant", "Susceptible", "Intermediate", "Not Tested")
+names(cols1) = c('SCCmecIa','SCCmecII','SCCmecIV')
+names(cols2) = c("C1", "C1a","C1b", "C2", "C3a", "C3b", "C4", "C5a", "C5b", "C5c", "C6a", "C6b", "C6c", "C7", "C8", "C9")
+names(cols3) = c('USA300','non-USA300')
+names(cols5) = c("Arteriovenous Graft", "Central venous catheter infection", "Device infection", "Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source")
+names(cols6) = c("Hospital of the University of Pennsylvania", "Penn Presbyterian")
+names(cols7) = c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88")
+names(colsMIC) = c("Resistant", "Susceptible", "Intermediate", "Not Tested")
+traitcolsall = c(cols7, cols1, cols3,colsMIC, cols5,cols6,cols2)
+
+
+CC8_pirate_plot <- gheatmap(Subtree_pir_CC8,traits3[-3], color = "NA", offset = 0.00002,
+                  legend_title = "Traits", colnames = FALSE) + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  #guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_fill_manual(values=traitcolsall,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88","SCCmecIa","SCCmecII","SCCmecIV","Died","Survived","C1", "C1a","C1b", "C2", "C3a", "C3b", "C4", "C5a", "C5b", "C5c", "C6a", "C6b", "C6c", "C7", "C8", "C9", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian", "Resistant", "Susceptible", "Intermediate", "Not Tested")) +
+                  #ggtitle("Patient Information and Clustering of CC5 Bacteremia Isolates (N=40)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + geom_treescale(x=0, y=0) + 
+  geom_point(data = node_support_CC8 %>% dplyr::filter(`SH-aLRT` >= 70 & uBS >= 70), aes(x = new_x , y = new_y ), colour = '#fc0303', size = 1)
+
+CC8_pirate_plot
+
+
+CC5_pirate_plot <- gheatmap(Subtree_pir_CC5,traits3[,-3], color = "NA", offset = 0.00002,
+                  legend_title = "Traits", colnames = FALSE) + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  #guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_fill_manual(values=traitcolsall,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88","SCCmecIa","SCCmecII","SCCmecIV","Died","Survived","C1", "C1a","C1b", "C2", "C3a", "C3b", "C4", "C5a", "C5b", "C5c", "C6a", "C6b", "C6c", "C7", "C8", "C9", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian", "Resistant", "Susceptible", "Intermediate", "Not Tested")) +
+                  #ggtitle("Patient Information and Clustering of CC5 Bacteremia Isolates (N=40)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + 
+  geom_point(data = node_support_CC5 %>% dplyr::filter(`SH-aLRT` >= 70 & uBS >= 70), aes(x = new_x , y = new_y ), colour = '#fc0303', size = 1)
+ 
+CC8_pirate_plot + geom_tiplab()
+
+CC5_pirate_plot
+
+```
+
+```
+
+# CC5 Alignments 
+
+## Trees
+
+```{r}
+
+########## SNIPPY ###################
+
+trsnipCC5 <- read.tree(file="~/tiramisu/working_folder/BREGOS_Snippy/trees/CC5corealn.treefile")
+trsnipCC5 <- trsnipCC5 %>% drop.tip("Reference")
+
+########## PARSNP ##############
+#trparsnpCC5 <- read.tree(file="~/tiramisu/OneDrive/BREGOS_1/CC5/Brooke_CC5_Parsnp/CC5_bmt.tree")
+#trparsnpCC5 <- trparsnpCC5 %>% drop.tip("GCF_000009645.1_ASM964v1_genomic.fna.ref")
+
+trparsnpCC5 <- read.tree(file="~/tiramisu/working_folder/BREGOS_parsnp/parsnpCC5aln.treefile") 
+trparsnpCC5 <- trparsnpCC5 %>% drop.tip("GCF_000009645.1_ASM964v1_genomic.fna.ref")
+
+
+########### PIRATE ##################
+trpirateCC5 <- read.tree(file="~/tiramisu/working_folder/BREGOS_pirate/pirate_CC5/bactopia-tools/pirate/core-genome/iqtree/core-genome.treefile")
+
+
+```
+
+## SNP Matrices
+
+```{r}
+
+######## SNIPPY ########## 
+CC5.aln.snippy.matrix <- as.matrix(read.delim("~/tiramisu/working_folder/BREGOS_Snippy/coreCC5.aln.matrix", row.names=1))
+CC5.aln.snippy.matrix <- CC5.aln.snippy.matrix[-1,-1] 
+CC5.aln.snippy.vals <- CC5.aln.snippy.matrix[lower.tri(CC5.aln.snippy.matrix)] 
+
+######### PARSNP ##########
+
+CC5.aln.parsnp.matrix <- as.matrix(read.delim("~/tiramisu/OneDrive/BREGOS_1/CC5/Brooke_CC5_Parsnp/CC5_aln_parsnp.matrix", row.names=1))
+CC5.aln.parsnp.matrix <- CC5.aln.parsnp.matrix[-1,-1]
+CC5.aln.parsnp.vals <- CC5.aln.parsnp.matrix[lower.tri(CC5.aln.parsnp.matrix)] 
+
+
+######### PIRATE ##########
+
+CC5.aln.pirate.matrix <- as.matrix(read.delim("~/tiramisu/working_folder/BREGOS_pirate/pirate_CC5/bactopia-tools/pirate/core-genome/core-genome.distance.txt", row.names=1))
+CC5.aln.pirate.vals <- CC5.aln.pirate.matrix[lower.tri(CC5.aln.pirate.matrix)] 
+
+
+```
+
+
+## Cophenetic Distance Comparison
+
+```{r}
+
+#### SNIPPY
+
+snipCC5_disvec <- as.vector(as.dist(CC5.aln.snippy.matrix))
+
+snipCC5_treevec <- as.data.frame(as.matrix(as.dist(cophenetic.phylo(trsnipCC5)))) %>% select(sort(names(.)))
+snipCC5_treevec <- snipCC5_treevec[order(rownames(snipCC5_treevec)),] 
+snipCC5_treevec <- as.vector(as.dist(snipCC5_treevec))
+
+plot(snipCC5_disvec, snipCC5_treevec, xlab="original pairwise distances", ylab="pairwise distances on the tree", main="Is Snippy CC5 Only Appropriate?", pch=20,  cex=3)
+#abline(lm(CC5snippy_disvec~CC5tr), col="red")
+cor(snipCC5_disvec,snipCC5_treevec)^2
+
+### PIRATE  ###### 
+
+pirCC5_disvec <- as.vector(as.dist(CC5.aln.pirate.matrix))
+pirCC5_treevec <- as.data.frame(as.matrix(as.dist(cophenetic.phylo(trpirateCC5)))) %>% select(sort(names(.)))
+pirCC5_treevec <- pirCC5_treevec[order(rownames(pirCC5_treevec)),] 
+pirCC5_treevec <- as.vector(as.dist(pirCC5_treevec))
+
+plot(pirCC5_disvec, pirCC5_treevec, xlab="original pairwise distances", ylab="pairwise distances on the tree", main="Pirate", pch=20,  cex=3) + geom_abline(aes(x = CC5snippy_disvecm, y= CC5tr), col="red")
+cor(pirCC5_disvec,pirCC5_treevec)^2
+
+
+### Parsnp
+
+CC5.aln.parsnp.matrix <- as.data.frame(CC5.aln.parsnp.matrix) %>% select(sort(names(.)))
+CC5.aln.parsnp.matrix <-CC5.aln.parsnp.matrix[order(rownames(CC5.aln.parsnp.matrix)),] 
+
+CC5parsnp_disvec <- as.vector(as.dist(CC5.aln.parsnp.matrix))
+CC5parsnp_treevec <- as.data.frame(as.matrix(as.dist(cophenetic.phylo(trparsnpCC5)))) %>% select(sort(names(.)))
+CC5parsnp_treevec <- CC5parsnp_treevec[order(rownames(CC5parsnp_treevec)),] 
+CC5parsnp_treevec <- as.vector(as.dist(CC5parsnp_treevec))
+
+plot(CC5parsnp_disvec, CC5parsnp_treevec, xlab="original pairwise distances", ylab="pairwise distances on the tree", main="Is Parsnp CC5 Only Appropriate?", pch=20,  cex=3)
+#abline(lm(CC5snippy_disvec~CC5tr), col="red")
+cor(CC5parsnp_disvec,CC5parsnp_treevec)^2
+
+
+
+
+```
+
+## Robinson-Foulds analysis
+
+```{r}
+
+randomCC5 <- rtree(n = 40, tip.label = CC5_genomes, rooted = FALSE) 
+randomCC8 <- rtree(n = 55, tip.label = CC8_genomes, rooted = FALSE) 
+
+#renaming the tip labels: 
+RFtrpirCC5 = rename_taxa(trpirateCC5, index, key = semaphorefile, value = sample_id)
+RFtrsnipCC5 = rename_taxa(sniptreesnpCC5, index, key = samplefna, value = sample_id)
+RFtrsnipCC5 <- unroot(RFtrsnipCC5)
+RFtrparsnpCC5 = rename_taxa(trparsnpCC5, index, key = samplefna, value = sample_id)
+RFtrparsnpCC5 <- unroot(RFtrparsnpCC5)
+
+plot.phylo(RFtrpirCC5, show.tip.label = TRUE)
+plot.phylo(RFtrsnipCC5, show.tip.label = TRUE)
+plot.phylo(RFtrparsnpCC5, show.tip.label = TRUE)
+
+dist.topo(RFtrsnipCC5, RFtrpirCC5, method = 'PH85')
+dist.topo(RFtrsnipCC5, RFtrparsnpCC5, method = 'PH85')
+dist.topo(RFtrpirCC5, RFtrparsnpCC5, method = 'PH85')
+dist.topo(RFtrpirCC5, randomCC5, method = 'PH85')
+dist.topo(RFtrparsnpCC5, randomCC5, method = 'PH85')
+dist.topo(RFtrsnipCC5, randomCC5, method = 'PH85')
+
+```
+
+## Cluster assignments 
+
+```{r}
+
+######## SNIPPY ###########
+
+CC5aln_snippy_names <- as.data.frame(row.names(CC5.aln.snippy.matrix))
+colnames(CC5aln_snippy_names) <- "sample_id"
+
+CC5aln_snippyIDs <- as.character(inner_join(CC5aln_snippy_names,index,by = c("sample_id" = "samplefna")) %>% .$name )
+
+ Relatives_35_aln_CC5_snippy <- as.data.frame(which(CC5.aln.snippy.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(CC5aln_snippyIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(CC5aln_snippyIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+ 
+
+ ####### PARSNP ###########
+
+CC5aln_parsnp_names <- as.data.frame(row.names(CC5.aln.parsnp.matrix))
+colnames(CC5aln_parsnp_names) <- "sample_id"
+
+CC5aln_parsnpIDs <- as.character(inner_join(CC5aln_parsnp_names,index,by = c("sample_id" = "samplefna")) %>% .$name )
+
+ Relatives_35_aln_CC5_parsnp <- as.data.frame(which(CC5.aln.parsnp.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(CC5aln_parsnpIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(CC5aln_parsnpIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+ 
+ 
+  Relatives_45_aln_CC5_parsnp <- as.data.frame(which(CC5.aln.parsnp.matrix < 45,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(CC5aln_parsnpIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(CC5aln_parsnpIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+ 
+ 
+
+####### PIRATE ###########
+ 
+ CC5aln_pirate_names <- as.data.frame(row.names(CC5.aln.pirate.matrix))
+colnames(CC5aln_pirate_names ) <- "sample_id"
+
+CC5aln_pirateIDs <- as.character(inner_join(CC5aln_pirate_names,index,by = c("sample_id" = "semaphorefile")) %>% .$name )
+
+ Relatives_35_aln_CC5_pirate <- as.data.frame(which(CC5.aln.pirate.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(CC5aln_pirateIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(CC5aln_pirateIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+```
+
+
+## Tree Plots
+```{r}
+
+trparsnpCC5 = rename_taxa(trparsnpCC5, index, key = samplefna, value = sample_id)
+
+traits <- bacteremia_st %>% select(sample_id, name, SubjectID2, st, USA300, II,IV,meca,Ia,IIa,IVa,IVc,IVd,IVg, "Hospital", "BSI Source", "Death in Hospital") %>% sapply(as.character)
+traits[is.na(traits)] <- " "
+
+#Need to sort out how to create a do loop
+traits2 <-as.data.frame(traits) %>% mutate(USA300 = case_when( USA300 == "1" ~ "USA300", USA300 == "0" ~ "non-USA300")) %>% mutate(Ia = case_when( Ia == TRUE ~ "+", Ia == FALSE ~ "-", Ia ==" " ~ "Ref")) %>%
+mutate(II = case_when( II == TRUE  ~ "+", II == FALSE ~ "-", II ==" "~"Ref")) %>%
+mutate(IIa = case_when( IIa == TRUE ~ "+", IIa == FALSE ~ "-", IIa ==" "~"Ref")) %>%
+mutate(IV = case_when( IV == TRUE ~ "+", IV == FALSE ~ "-", IV ==" "~"Ref")) %>%
+mutate(IVa = case_when( IVa == TRUE ~ "+", IVa == FALSE ~ "-", IVa ==" "~"Ref")) %>%
+mutate(IVc = case_when( IVc == TRUE ~ "+", IVc == FALSE ~ "-", IVc ==" "~"Ref")) %>%
+mutate(IVd = case_when( IVd == TRUE ~ "+", IVd == FALSE ~ "-", IVd ==" "~"Ref")) %>%
+mutate(IVg = case_when( IVg == TRUE ~ "+", IVg == FALSE ~ "-", IVg ==" "~"Ref")) %>%
+mutate(meca = case_when( meca == TRUE ~ "+", meca == FALSE ~ "-", meca ==" "~"Ref")) %>%
+mutate(Cluster35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Cluster15 = case_when(
+   name %in% c("S.190725.00106", "S.190725.00118") ~ "Cluster F", 
+   name %in% c("S.190719.00327", "S.190719.00341") ~ "Cluster D", 
+   name %in% c("S.190723.00180", "S.190719.00326") ~ "Cluster A", 
+   name %in% c("S.190725.00090", "S.190725.00117") ~ "Cluster C")) %>%
+mutate(Cluster45 = case_when(
+   name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+   name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+   name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+   name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+   name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G',
+   name %in% c("S.190723.00174", "S.190723.00181", "S.190723.00191", "S.190725.00099", "S.190725.00093") ~ 'Cluster E',
+   name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Total35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F', 
+  name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G')) %>%
+  mutate(SCCmec = case_when( Ia == "+" ~ "SCCmecIa", 
+                                              II == "+" | IIa == "+" ~ "SCCmecII",
+                                                IV == "+" | IVa == "+" | IVc =="+" | IVd == "+" | IVg == "+" ~ "SCCmecIV")) %>%
+mutate(deathyn = case_when(`Death in Hospital` == "Yes" ~ "Died", `Death in Hospital` == "No" ~ "Survived"))
+
+
+rownames(traits2) <- traits2[,1] #Assigning row names from 1st column 
+traits2[,1] <- NULL #Removing the first column
+
+traits3 <- traits2 %>% select(st,SCCmec, USA300, "BSI Source", Hospital, Cluster15,Cluster35,Cluster45,Total35 ) 
+#%>% dplyr::rename(Died = deathyn)
+#traits3$Died <- as.factor(traits3$Died)
+traits3$Cluster35 <- as.factor(traits3$Cluster35)
+traits3$Cluster15 <- as.factor(traits3$Cluster15)
+traits3$Cluster45 <- as.factor(traits3$Cluster45)
+traits3$SCCmec <- as.factor(traits3$SCCmec)
+
+cols1= c("#a8cbf0","#7d93b8","#486699")
+cols2= c("forestgreen","darkorchid3", "cadetblue1")
+cols3=c("#486699","#e3e5e6")
+cols4= c("blue","green","pink", "yellow")
+cols5= c("#f08271", "#f0bf71", "#f0f071", "#adf08b", "#8bc3f0", "orchid", "#8b8bf0", "#e3e5e6", "brown2")
+cols6= c("#a8cbf0", "#f0bf71")
+cols7 = c("#f08271", "orange", "#8bc3f0", "yellowgreen", "forestgreen", "cadetblue1", "blue", "orchid", "gold","#f0bf71", "brown2")
+names(cols1) = c('SCCmecIa','SCCmecII','SCCmecIV')
+names(cols2) = c('Cluster E','Cluster F', 'Cluster G')
+names(cols4) = c("Cluster A", "Cluster B","Cluster C","Cluster D")
+names(cols3) = c('USA300','non-USA300')
+names(cols5) = c("Arteriovenous Graft", "Central venous catheter infection", "Device infection", "Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source")
+names(cols6) = c("Hospital of the University of Pennsylvania", "Penn Presbyterian")
+names(cols7) = c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88")
+traitcols = c(cols7, cols1, cols2, cols4, cols5,cols6)
+traitcolsCC8 = c(cols7, cols1, cols3, cols2, cols4, cols5,cols6, cols7)
+traitcolsall = c(cols7, cols1, cols3, cols2, cols4, cols5,cols6)
+
+CC5_parsnp_ggtree <- ggtree(trparsnpCC5, right = TRUE) + geom_tiplab(linetype=NA, size=2.5, offset=0.000000001, align = TRUE)
+
+CC5_parsnp_ggtree
+
+CC5_parsnp_plot <- gheatmap(CC5_parsnp_ggtree,traits3[,-3], color = "NA", offset = 0.00002,
+                  legend_title = "Traits", colnames = FALSE) + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  #guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_fill_manual(values=traitcols,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88","SCCmecIa","SCCmecII","SCCmecIV","Died","Survived","Cluster A","Cluster B","Cluster C","Cluster D", "Cluster E", "Cluster F", "Cluster G", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian")) +
+                  #ggtitle("Patient Information and Clustering of CC5 Bacteremia Isolates (N=40)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + geom_treescale(x=0, y=0) + geom_nodelab()
+
+CC5_parsnp_plot
+
+
+trunated_tree <- gheatmap(CC5_parsnp_ggtree,traits3[,c(-1:-3, -6:-8)], color = "NA", offset = 0.00002,
+                  legend_title = "Traits", colnames = FALSE) + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  #guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_fill_manual(values=traitcols,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88","SCCmecIa","SCCmecII","SCCmecIV","Died","Survived","Cluster A","Cluster B","Cluster C","Cluster D", "Cluster E", "Cluster F", "Cluster G", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian")) +
+                  #ggtitle("Patient Information and Clustering of CC5 Bacteremia Isolates (N=40)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + geom_treescale(x=0, y=0)
+
+trunated_tree
+
+```
+
+```{r}
+
+#From its own alingment
+
+
+traits <- bacteremia_st %>% select(sample_id, name, SubjectID2, st, USA300, II,IV,meca,Ia,IIa,IVa,IVc,IVd,IVg, "Hospital", "BSI Source", "Death in Hospital") %>% sapply(as.character)
+traits[is.na(traits)] <- " "
+
+#Need to sort out how to create a do loop
+traits2 <-as.data.frame(traits) %>% mutate(USA300 = case_when( USA300 == "1" ~ "USA300", USA300 == "0" ~ "non-USA300")) %>% mutate(Ia = case_when( Ia == TRUE ~ "+", Ia == FALSE ~ "-", Ia ==" " ~ "Ref")) %>%
+mutate(II = case_when( II == TRUE  ~ "+", II == FALSE ~ "-", II ==" "~"Ref")) %>%
+mutate(IIa = case_when( IIa == TRUE ~ "+", IIa == FALSE ~ "-", IIa ==" "~"Ref")) %>%
+mutate(IV = case_when( IV == TRUE ~ "+", IV == FALSE ~ "-", IV ==" "~"Ref")) %>%
+mutate(IVa = case_when( IVa == TRUE ~ "+", IVa == FALSE ~ "-", IVa ==" "~"Ref")) %>%
+mutate(IVc = case_when( IVc == TRUE ~ "+", IVc == FALSE ~ "-", IVc ==" "~"Ref")) %>%
+mutate(IVd = case_when( IVd == TRUE ~ "+", IVd == FALSE ~ "-", IVd ==" "~"Ref")) %>%
+mutate(IVg = case_when( IVg == TRUE ~ "+", IVg == FALSE ~ "-", IVg ==" "~"Ref")) %>%
+mutate(meca = case_when( meca == TRUE ~ "+", meca == FALSE ~ "-", meca ==" "~"Ref")) %>%
+mutate(Cluster35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Cluster15 = case_when(
+   name %in% c("S.190725.00106", "S.190725.00118") ~ "Cluster F", 
+   name %in% c("S.190719.00327", "S.190719.00341") ~ "Cluster D", 
+   name %in% c("S.190723.00180", "S.190719.00326") ~ "Cluster A", 
+   name %in% c("S.190725.00090", "S.190725.00117") ~ "Cluster C")) %>%
+mutate(Cluster45 = case_when(
+   name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+   name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+   name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+   name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+   name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G',
+   name %in% c("S.190723.00174", "S.190723.00181", "S.190723.00191", "S.190725.00099", "S.190725.00093") ~ 'Cluster E',
+   name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Total35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F', 
+  name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G')) %>%
+  mutate(SCCmec = case_when( Ia == "+" ~ "SCCmecIa", 
+                                              II == "+" | IIa == "+" ~ "SCCmecII",
+                                                IV == "+" | IVa == "+" | IVc =="+" | IVd == "+" | IVg == "+" ~ "SCCmecIV")) %>%
+mutate(deathyn = case_when(`Death in Hospital` == "Yes" ~ "Died", `Death in Hospital` == "No" ~ "Survived"))
+
+
+rownames(traits2) <- traits2[,1] #Assigning row names from 1st column 
+traits2[,1] <- NULL #Removing the first column
+
+traits3 <- traits2 %>% select(st,SCCmec, USA300, "BSI Source", Hospital, Cluster15,Cluster35,Cluster45,Total35 ) 
+#%>% dplyr::rename(Died = deathyn)
+#traits3$Died <- as.factor(traits3$Died)
+traits3$Cluster35 <- as.factor(traits3$Cluster35)
+traits3$Cluster15 <- as.factor(traits3$Cluster15)
+traits3$Cluster45 <- as.factor(traits3$Cluster45)
+traits3$SCCmec <- as.factor(traits3$SCCmec)
+
+cols1= c("#a8cbf0","#7d93b8","#486699")
+cols2= c("forestgreen","darkorchid3", "cadetblue1")
+cols3=c("#486699","#e3e5e6")
+cols4= c("blue","green","pink", "yellow")
+cols5= c("#f08271", "#f0bf71", "#f0f071", "#adf08b", "#8bc3f0", "orchid", "#8b8bf0", "#e3e5e6", "brown2")
+cols6= c("#a8cbf0", "#f0bf71")
+cols7 = c("#f08271", "orange", "#8bc3f0", "yellowgreen", "forestgreen", "cadetblue1", "blue", "orchid", "gold","#f0bf71", "brown2")
+names(cols1) = c('SCCmecIa','SCCmecII','SCCmecIV')
+names(cols2) = c('Cluster E','Cluster F', 'Cluster G')
+names(cols4) = c("Cluster A", "Cluster B","Cluster C","Cluster D")
+names(cols3) = c('USA300','non-USA300')
+names(cols5) = c("Arteriovenous Graft", "Central venous catheter infection", "Device infection", "Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source")
+names(cols6) = c("Hospital of the University of Pennsylvania", "Penn Presbyterian")
+names(cols7) = c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88")
+traitcols = c(cols7, cols1, cols2, cols4, cols5,cols6)
+traitcolsCC8 = c(cols7, cols1, cols3, cols2, cols4, cols5,cols6, cols7)
+
+
+CC5_pirate_ggtree <- ggtree(trpirateCC5, right = TRUE) + geom_tiplab(linetype=NA, size=2.5, offset=0.000000001, align = TRUE)
+
+CC5_pirate_ggtree
+
+CC5_pirate_plot <- gheatmap(CC5_pirate_ggtree,traits3[,-3], color = "NA", offset = 0.00002,
+                  legend_title = "Traits", colnames = FALSE) + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  #guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_fill_manual(values=traitcols,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88","SCCmecIa","SCCmecII","SCCmecIV","Died","Survived","Cluster A","Cluster B","Cluster C","Cluster D", "Cluster E", "Cluster F", "Cluster G", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian")) +
+                  #ggtitle("Patient Information and Clustering of CC5 Bacteremia Isolates (N=40)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + geom_treescale(x=0, y=0) + geom_nodelab()
+
+CC5_pirate_plot
+
+
+```
+
+### Pirate subset from larger alignment
+```{r}
+
+traits <- bacteremia_st %>% select(sample_id, name, SubjectID2, st, USA300, II,IV,meca,Ia,IIa,IVa,IVc,IVd,IVg, "Hospital", "BSI Source", "Death in Hospital") %>% sapply(as.character)
+traits[is.na(traits)] <- " "
+
+#Need to sort out how to create a do loop
+traits2 <-as.data.frame(traits) %>% mutate(USA300 = case_when( USA300 == "1" ~ "USA300", USA300 == "0" ~ "non-USA300")) %>% mutate(Ia = case_when( Ia == TRUE ~ "+", Ia == FALSE ~ "-", Ia ==" " ~ "Ref")) %>%
+mutate(II = case_when( II == TRUE  ~ "+", II == FALSE ~ "-", II ==" "~"Ref")) %>%
+mutate(IIa = case_when( IIa == TRUE ~ "+", IIa == FALSE ~ "-", IIa ==" "~"Ref")) %>%
+mutate(IV = case_when( IV == TRUE ~ "+", IV == FALSE ~ "-", IV ==" "~"Ref")) %>%
+mutate(IVa = case_when( IVa == TRUE ~ "+", IVa == FALSE ~ "-", IVa ==" "~"Ref")) %>%
+mutate(IVc = case_when( IVc == TRUE ~ "+", IVc == FALSE ~ "-", IVc ==" "~"Ref")) %>%
+mutate(IVd = case_when( IVd == TRUE ~ "+", IVd == FALSE ~ "-", IVd ==" "~"Ref")) %>%
+mutate(IVg = case_when( IVg == TRUE ~ "+", IVg == FALSE ~ "-", IVg ==" "~"Ref")) %>%
+mutate(meca = case_when( meca == TRUE ~ "+", meca == FALSE ~ "-", meca ==" "~"Ref")) %>%
+mutate(Cluster35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Cluster15 = case_when(
+   name %in% c("S.190725.00106", "S.190725.00118") ~ "Cluster F", 
+   name %in% c("S.190719.00327", "S.190719.00341") ~ "Cluster D", 
+   name %in% c("S.190723.00180", "S.190719.00326") ~ "Cluster A", 
+   name %in% c("S.190725.00090", "S.190725.00117") ~ "Cluster C")) %>%
+mutate(Cluster45 = case_when(
+   name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+   name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+   name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+   name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+   name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G',
+   name %in% c("S.190723.00174", "S.190723.00181", "S.190723.00191", "S.190725.00099", "S.190725.00093") ~ 'Cluster E',
+   name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Total35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F', 
+  name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G')) %>%
+  mutate(SCCmec = case_when( Ia == "+" ~ "SCCmecIa", 
+                                              II == "+" | IIa == "+" ~ "SCCmecII",
+                                                IV == "+" | IVa == "+" | IVc =="+" | IVd == "+" | IVg == "+" ~ "SCCmecIV")) %>%
+mutate(deathyn = case_when(`Death in Hospital` == "Yes" ~ "Died", `Death in Hospital` == "No" ~ "Survived"))
+
+
+rownames(traits2) <- traits2[,1] #Assigning row names from 1st column 
+traits2[,1] <- NULL #Removing the first column
+
+traits3 <- traits2 %>% select(st,SCCmec, USA300, "BSI Source", Hospital, Cluster15,Cluster35,Cluster45,Total35 ) 
+#%>% dplyr::rename(Died = deathyn)
+#traits3$Died <- as.factor(traits3$Died)
+traits3$Cluster35 <- as.factor(traits3$Cluster35)
+traits3$Cluster15 <- as.factor(traits3$Cluster15)
+traits3$Cluster45 <- as.factor(traits3$Cluster45)
+traits3$SCCmec <- as.factor(traits3$SCCmec)
+
+cols1= c("#a8cbf0","#7d93b8","#486699")
+cols2= c("forestgreen","darkorchid3", "cadetblue1")
+cols3=c("#486699","#e3e5e6")
+cols4= c("blue","green","pink", "yellow")
+cols5= c("#f08271", "#f0bf71", "#f0f071", "#adf08b", "#8bc3f0", "orchid", "#8b8bf0", "#e3e5e6", "brown2")
+cols6= c("#a8cbf0", "#f0bf71")
+cols7 = c("#f08271", "orange", "#8bc3f0", "yellowgreen", "forestgreen", "cadetblue1", "blue", "orchid", "gold","#f0bf71", "brown2")
+names(cols1) = c('SCCmecIa','SCCmecII','SCCmecIV')
+names(cols2) = c('Cluster E','Cluster F', 'Cluster G')
+names(cols4) = c("Cluster A", "Cluster B","Cluster C","Cluster D")
+names(cols3) = c('USA300','non-USA300')
+names(cols5) = c("Arteriovenous Graft", "Central venous catheter infection", "Device infection", "Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source")
+names(cols6) = c("Hospital of the University of Pennsylvania", "Penn Presbyterian")
+names(cols7) = c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88")
+traitcols = c(cols7, cols1, cols2, cols4, cols5,cols6)
+traitcolsCC8 = c(cols7, cols1, cols3, cols2, cols4, cols5,cols6, cols7)
+
+
+CC5_pirate_ggtree <- ggtree(trpirateCC5, right = TRUE) + geom_tiplab(linetype=NA, size=2.5, offset=0.000000001, align = TRUE)
+
+CC5_pirate_ggtree
+
+CC5_pirate_plot <- gheatmap(CC5_pirate_ggtree,traits3[,-3], color = "NA", offset = 0.00002,
+                  legend_title = "Traits", colnames = FALSE) + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  #guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_fill_manual(values=traitcols,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88","SCCmecIa","SCCmecII","SCCmecIV","Died","Survived","Cluster A","Cluster B","Cluster C","Cluster D", "Cluster E", "Cluster F", "Cluster G", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian")) +
+                  #ggtitle("Patient Information and Clustering of CC5 Bacteremia Isolates (N=40)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + geom_treescale(x=0, y=0) + geom_nodelab()
+
+CC5_pirate_plot
+```
+
+
+
+
+```{r}
+
+trsnipCC5 = rename_taxa(trsnipCC5, index, key = samplefna, value = sample_id)
+trsnipCC5 <- midpoint.root(trsnipCC5)
+
+
+traits <- bacteremia_st %>% select(sample_id, name, SubjectID2, st, USA300, II,IV,meca,Ia,IIa,IVa,IVc,IVd,IVg, "Hospital", "BSI Source", "Death in Hospital") %>% sapply(as.character)
+traits[is.na(traits)] <- " "
+
+#Need to sort out how to create a do loop
+traits2 <-as.data.frame(traits) %>% mutate(USA300 = case_when( USA300 == "1" ~ "USA300", USA300 == "0" ~ "non-USA300")) %>% mutate(Ia = case_when( Ia == TRUE ~ "+", Ia == FALSE ~ "-", Ia ==" " ~ "Ref")) %>%
+mutate(II = case_when( II == TRUE  ~ "+", II == FALSE ~ "-", II ==" "~"Ref")) %>%
+mutate(IIa = case_when( IIa == TRUE ~ "+", IIa == FALSE ~ "-", IIa ==" "~"Ref")) %>%
+mutate(IV = case_when( IV == TRUE ~ "+", IV == FALSE ~ "-", IV ==" "~"Ref")) %>%
+mutate(IVa = case_when( IVa == TRUE ~ "+", IVa == FALSE ~ "-", IVa ==" "~"Ref")) %>%
+mutate(IVc = case_when( IVc == TRUE ~ "+", IVc == FALSE ~ "-", IVc ==" "~"Ref")) %>%
+mutate(IVd = case_when( IVd == TRUE ~ "+", IVd == FALSE ~ "-", IVd ==" "~"Ref")) %>%
+mutate(IVg = case_when( IVg == TRUE ~ "+", IVg == FALSE ~ "-", IVg ==" "~"Ref")) %>%
+mutate(meca = case_when( meca == TRUE ~ "+", meca == FALSE ~ "-", meca ==" "~"Ref")) %>%
+mutate(Cluster35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Cluster15 = case_when(
+   name %in% c("S.190725.00106", "S.190725.00118") ~ "Cluster F", 
+   name %in% c("S.190719.00327", "S.190719.00341") ~ "Cluster D", 
+   name %in% c("S.190723.00180", "S.190719.00326") ~ "Cluster A", 
+   name %in% c("S.190725.00090", "S.190725.00117") ~ "Cluster C")) %>%
+mutate(Cluster45 = case_when(
+   name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+   name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+   name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+   name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+   name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G',
+   name %in% c("S.190723.00174", "S.190723.00181", "S.190723.00191", "S.190725.00099", "S.190725.00093") ~ 'Cluster E',
+   name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F')) %>%
+mutate(Total35 = case_when(
+  name %in% c("S.190723.00180", "S.190731.00836", "S.190719.00326") ~ 'Cluster A',
+  name %in% c("S.190719.00337", "S.190725.00119") ~ 'Cluster B',
+  name %in% c("S.190725.00090", "S.190725.00117") ~ 'Cluster C',
+  name %in% c("S.190719.00327", "S.190719.00341") ~ 'Cluster D',
+  name %in% c("S.190723.00174", "S.190723.00181") ~ 'Cluster E',
+  name %in% c("S.190725.00106", "S.190725.00118") ~ 'Cluster F', 
+  name %in% c("S.190731.00833", "S.190723.00179", "S.190725.00107") ~ 'Cluster G')) %>%
+  mutate(SCCmec = case_when( Ia == "+" ~ "SCCmecIa", 
+                                              II == "+" | IIa == "+" ~ "SCCmecII",
+                                                IV == "+" | IVa == "+" | IVc =="+" | IVd == "+" | IVg == "+" ~ "SCCmecIV")) %>%
+mutate(deathyn = case_when(`Death in Hospital` == "Yes" ~ "Died", `Death in Hospital` == "No" ~ "Survived"))
+
+
+rownames(traits2) <- traits2[,1] #Assigning row names from 1st column 
+traits2[,1] <- NULL #Removing the first column
+
+traits3 <- traits2 %>% select(st,SCCmec, USA300, "BSI Source", Hospital, Cluster15,Cluster35,Cluster45,Total35 ) 
+#%>% dplyr::rename(Died = deathyn)
+#traits3$Died <- as.factor(traits3$Died)
+traits3$Cluster35 <- as.factor(traits3$Cluster35)
+traits3$Cluster15 <- as.factor(traits3$Cluster15)
+traits3$Cluster45 <- as.factor(traits3$Cluster45)
+traits3$SCCmec <- as.factor(traits3$SCCmec)
+
+cols1= c("#a8cbf0","#7d93b8","#486699")
+cols2= c("forestgreen","darkorchid3", "cadetblue1")
+cols3=c("#486699","#e3e5e6")
+cols4= c("blue","green","pink", "yellow")
+cols5= c("#f08271", "#f0bf71", "#f0f071", "#adf08b", "#8bc3f0", "orchid", "#8b8bf0", "#e3e5e6", "brown2")
+cols6= c("#a8cbf0", "#f0bf71")
+cols7 = c("#f08271", "orange", "#8bc3f0", "yellowgreen", "forestgreen", "cadetblue1", "blue", "orchid", "gold","#f0bf71", "brown2")
+names(cols1) = c('SCCmecIa','SCCmecII','SCCmecIV')
+names(cols2) = c('Cluster E','Cluster F', 'Cluster G')
+names(cols4) = c("Cluster A", "Cluster B","Cluster C","Cluster D")
+names(cols3) = c('USA300','non-USA300')
+names(cols5) = c("Arteriovenous Graft", "Central venous catheter infection", "Device infection", "Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source")
+names(cols6) = c("Hospital of the University of Pennsylvania", "Penn Presbyterian")
+names(cols7) = c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88")
+traitcols = c(cols7, cols1, cols2, cols4, cols5,cols6)
+traitcolsCC8 = c(cols7, cols1, cols3, cols2, cols4, cols5,cols6, cols7)
+
+
+CC5_snippy_ggtree <- ggtree(trsnipCC5, right = FALSE) + geom_tiplab(linetype=NA, size=2.5, offset=0.000000001, align = TRUE)
+
+CC5_snippy_ggtree
+
+CC5_snippy_plot <- gheatmap(CC5_snippy_ggtree,traits3[,-3], color = "NA", offset = 0.00002,
+                  legend_title = "Traits", colnames = FALSE) + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  #guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_fill_manual(values=traitcols,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88","SCCmecIa","SCCmecII","SCCmecIV","Died","Survived","Cluster A","Cluster B","Cluster C","Cluster D", "Cluster E", "Cluster F", "Cluster G", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian")) +
+                  #ggtitle("Patient Information and Clustering of CC5 Bacteremia Isolates (N=40)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + geom_treescale(x=0, y=0) + geom_nodelab()
+
+CC5_snippy_plot
+CC5_pirate_plot
+CC5_parsnp_plot
+
+
+```
+
+
+
+
+
+# CC8 Alignment 
+
+## Trees
+
+```{r}
+
+########## SNIPPY ###################
+
+trsnipCC8 <- read.tree(file="~/tiramisu/working_folder/BREGOS_Snippy/trees/CC8corealn.treefile")
+trsnipCC8 <- coretreesnpCC8 %>% drop.tip("Reference")
+
+########## PARSNP ##############
+
+#trparsnpCC8 <- read.tree(file="~/tiramisu/OneDrive/BREGOS_1/CC8/Parsnp_NCTC_CC8/parsnp.tree")
+#trparsnpCC8 <- trparsnpCC8 %>% drop.tip("GCF_000013425.1_ASM1342v1_genomic.fna.ref")
+
+trparsnpCC8 <- read.tree(file="~/tiramisu/working_folder/BREGOS_parsnp/parsnpCC8aln.treefile") 
+trparsnpCC8 <- trparsnpCC8 %>% drop.tip("GCF_000013425.1_ASM1342v1_genomic.fna.ref")
+
+
+########### PIRATE ##################
+
+trpirateCC8 <- read.tree(file="~/tiramisu/working_folder/BREGOS_pirate/pirate_CC8/bactopia-tools/pirate/core-genome/iqtree/core-genome.treefile")
+
+
+```
+
+## SNP Matrices
+
+```{r}
+######## SNIPPY ########## 
+CC8.aln.snippy.matrix <- as.matrix(read.delim("~/tiramisu/working_folder/BREGOS_Snippy/coreCC8.aln.matrix", row.names=1))
+CC8.aln.snippy.matrix <- CC8.aln.snippy.matrix[-1,-1] 
+CC8.aln.snippy.vals <- CC8.aln.snippy.matrix[lower.tri(CC8.aln.snippy.matrix)] 
+
+#hist(CC8.aln.snippy.vals)
+#max(CC8.aln.snippy.vals)
+
+
+######### PARSNP ##########
+
+CC8.aln.parsnp.matrix <- as.matrix(read.delim("~/tiramisu/OneDrive/BREGOS_1/CC8/Parsnp_NCTC_CC8/parsnp_CC8mat.matrix", row.names=1))
+CC8.aln.parsnp.matrix <- CC8.aln.parsnp.matrix[-1,-1]
+
+CC8.aln.parsnip.vals <- CC8.aln.parsnp.matrix[lower.tri(CC8.aln.parsnp.matrix)]
+
+
+######### PIRATE ##########
+
+CC8.aln.pirate.matrix <- as.matrix(read.delim("~/tiramisu/working_folder/BREGOS_pirate/pirate_CC8/bactopia-tools/pirate/core-genome/core-genome.distance.txt", row.names=1))
+CC8.aln.pirate.vals <- CC8.aln.pirate.matrix[lower.tri(CC8.aln.pirate.matrix)] 
+
+
+
+```
+
+## Robinson-Foulds analysis
+
+```{r}
+
+randomCC8 <- rtree(n = 55, tip.label = CC8_genomes, rooted = FALSE) 
+
+#renaming the tip labels: 
+RFtrpirCC8 = rename_taxa(trpirateCC8, index, key = semaphorefile, value = sample_id)
+RFtrsnipCC8 = rename_taxa(sniptreesnpCC5, index, key = samplefna, value = sample_id)
+RFtrsnipCC8 <- unroot(RFtrsnipCC8)
+RFtrparsnpCC8 = rename_taxa(trparsnpCC8, index, key = samplefna, value = sample_id)
+RFtrparsnpCC8 <- unroot(RFtrparsnpCC8)
+
+plot.phylo(RFtrpirCC8, show.tip.label = TRUE)
+plot.phylo(RFtrsnipCC8, show.tip.label = TRUE)
+plot.phylo(RFtrparsnpCC8, show.tip.label = TRUE)
+
+dist.topo(RFtrsnipCC8, RFtrpirCC8, method = 'PH85')
+dist.topo(RFtrsnipCC8, RFtrparsnpCC8, method = 'PH85')
+dist.topo(RFtrpirCC8, RFtrparsnpCC8, method = 'PH85')
+dist.topo(RFtrpirCC8, randomCC8, method = 'PH85')
+dist.topo(RFtrparsnpCC8, randomCC8, method = 'PH85')
+dist.topo(RFtrsnipCC8, randomCC8, method = 'PH85')
+
+```
+
+
+## Cluster assignments 
+
+```{r}
+
+######## SNIPPY ###########
+
+CC8aln_snippy_names <- as.data.frame(row.names(CC8.aln.snippy.matrix))
+colnames(CC8aln_snippy_names) <- "sample_id"
+
+CC8aln_snippyIDs <- as.character(inner_join(CC8aln_snippy_names,index,by = c("sample_id" = "samplefna")) %>% .$name )
+
+ Relatives_35_aln_CC8_snippy <- as.data.frame(which(CC8.aln.snippy.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(CC8aln_snippyIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(CC8aln_snippyIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+ 
+
+ ####### PARSNP ###########
+
+CC8aln_parsnp_names <- as.data.frame(row.names(CC8.aln.parsnp.matrix))
+colnames(CC8aln_snippy_names) <- "sample_id"
+
+CC8aln_parsnpIDs <- as.character(inner_join(CC8aln_parsnp_names,index,by = c("sample_id" = "samplefna")) %>% .$name )
+
+ Relatives_35_aln_CC8_parsnp <- as.data.frame(which(CC5.aln.parsnp.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(CC5aln_parsnpIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(CC5aln_parsnpIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+ 
+
+####### PIRATE ###########
+ 
+ CC8aln_pirate_names <- as.data.frame(row.names(CC8.aln.pirate.matrix))
+colnames(CC8aln_pirate_names ) <- "sample_id"
+
+CC8aln_pirateIDs <- as.character(inner_join(CC8aln_pirate_names,index,by = c("sample_id" = "semaphorefile")) %>% .$name )
+
+ Relatives_35_aln_CC8_pirate <- as.data.frame(which(CC8.aln.pirate.matrix < 35,arr.ind=TRUE)) %>%
+   filter(row != col) %>%
+   mutate(row2 = ifelse(row > col,col, row)) %>%
+   mutate(col2 = ifelse(row > col,row, col)) %>%
+   select(row2,col2) %>%
+  mutate(strain1 = get_sampleID(CC8aln_pirateIDs,row2)) %>%
+  mutate(strain2 = get_sampleID(CC8aln_pirateIDs,col2)) %>%
+select(strain1,strain2) %>%
+unique() %>% 
+   left_join(times, by = c("strain1" = "name")) %>%
+   left_join(times, by = c("strain2" = "name")) %>%
+   mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+   mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+   mutate(datediff = as.numeric(abs(time1-time2)))
+
+
+```
+
+
+## Tree Plots
+
+```{r}
+
+##### CC8 TREE ##########
+
+trparsnpCC8 = rename_taxa(trparsnpCC8, index, key = samplefna, value = sample_id)
+
+CC8ggtree <- ggtree(trparsnpCC8)
+
+CC8ggtree
+
+CC8_pasrnp_plot <- gheatmap(CC8ggtree,traits3, colnames = FALSE,
+                  legend_title = "Traits", color = "NA") + 
+                  #geom_treescale(width = 2, x =10 , y =37, 
+                                 #fontsize = 3, label = "SNPs", offset.label = -2.0) +
+                  guides(color = guide_legend(override.aes = list(size = 3))) +
+                  scale_color_manual(values=traitcolsCC8)+
+                  scale_fill_manual(values=traitcolsCC8,name="Traits", na.translate = FALSE, breaks =
+                                    c("0","105","1750","2250", "231", "30", "3059", "5", "72", "8" , "88", "SCCmecIa","SCCmecII","SCCmecIV","USA300", "non-USA300","Cluster E", "Cluster F", "Arteriovenous Graft", "Central venous catheter infection ", "Device infection", " Other", "Respiratory source", "Skin site", "Surgical site", "Unknown", "Urinary source", "Hospital of the University of Pennsylvania", "Penn Presbyterian" 
+)) +
+                  #ggtitle("Patient Information and Clustering of CC8 Bacteremia Isolates (N=55)") + 
+                  #theme(plot.title = element_text(hjust=1)) + 
+                  theme(legend.position = "none") + geom_treescale(x=0 , y=-1)
+
+CC8_pasrnp_plot
+
+
+
+```
+
+# Summary Table of Clusters by Alignment Method
+```{r, echo=FALSE}
+
+#Fill in to create a tidy table summarizing the clusters for supplementary data (?)
+
+quantile(CC8.aln.parsnip.vals, probs = .01) #62.52
+quantile(CC8.aln.pirate.vals, probs = .01) #48.84
+quantile(CC8.aln.snippy.vals, probs = .01) #48.84
+quantile(CC5.aln.parsnp.vals, probs = .01) #43.79
+quantile(CC5.aln.pirate.vals, probs = .01) #39.58
+quantile(CC5.aln.snippy.vals, probs = .01) #42.79
+
+quantile(total_to_CC5.parsnip.vals, probs = .01) #35.16
+quantile(total_to_CC5.pirate.vals, probs = .01) #38.37
+quantile(total_to_CC5.snippy.vals, probs = .01) #25
+quantile(total_to_CC8.parsnip.vals, probs = .01) #52.36
+quantile(total_to_CC8.pirate.vals, probs = .01) #47.84
+quantile(total_to_CC8.snippy.vals, probs = .01) #34
+
+quantile(total_to_CC5.snippy.vals, probs = .0205) #25
+quantile(total_to_CC8.snippy.vals, probs = .0105)
+
+```
+
+
+# Figure 1
+
+```{r}
+
+##### Pairwise SNP Histogram ######
+
+#convert values to df
+CC8.aln.parsnip.vals.df <- as.data.frame(CC8.aln.parsnip.vals)
+total_to_CC8.parsnip.vals.df <- as.data.frame(total_to_CC8.parsnip.vals)
+
+CC8.aln.parsnip.vals.df$Source <- "CC"
+CC8.aln.parsnip.vals.df <- CC8.aln.parsnip.vals.df %>% rename(vals = CC8.aln.parsnip.vals)
+
+total_to_CC8.parsnip.vals.df$Source <- "Total"
+total_to_CC8.parsnip.vals.df <- total_to_CC8.parsnip.vals.df %>% rename(vals = total_to_CC8.parsnip.vals)
+
+#Tidy data
+CC8_parsnp_vals <- rbind(total_to_CC8.parsnip.vals.df, CC8.aln.parsnip.vals.df)
+
+c1 <- t_col("red", percent = 50, name = "lt.red") 
+c2 <- t_col("blue", percent = 50, name = "lt.blue")
+
+Hist_CC8_parsnp <- ggplot(CC8_parsnp_vals, aes(x=vals, fill=Source)) + geom_histogram(alpha = 0.5, position = "identity", binwidth = 5, show.legend = FALSE) + scale_fill_manual(values = c("red", "blue")) + scale_color_manual(values = c("black", "black")) + theme_classic() + labs(x = "SNP Distances", y = "Frequency of Pairs") + geom_vline(xintercept = 35, color = "gray55", linetype = "dashed") + scale_x_continuous(breaks = seq(0, 750, 100), lim = c(0, 750), expand = c(0,0)) + scale_y_continuous(breaks= seq(0,175,25), lim = c(0,175), expand = c(0,0))
+
+Hist_CC8_parsnp
+
+```
+
+```{r}
+
+#convert values to df
+CC8.aln.pirate.vals.df <- as.data.frame(CC8.aln.pirate.vals)
+total_to_CC8.pirate.vals.df <- as.data.frame(total_to_CC8.pirate.vals)
+
+CC8.aln.pirate.vals.df$Source <- "CC"
+CC8.aln.pirate.vals.df <- CC8.aln.pirate.vals.df %>% rename(vals = CC8.aln.pirate.vals)
+
+total_to_CC8.pirate.vals.df$Source <- "Total"
+total_to_CC8.pirate.vals.df <- total_to_CC8.pirate.vals.df %>% rename(vals = total_to_CC8.pirate.vals)
+
+#Tidy data
+CC8_pirate_vals <- rbind(total_to_CC8.pirate.vals.df, CC8.aln.pirate.vals.df)
+
+c1 <- t_col("red", percent = 50, name = "lt.red") 
+c2 <- t_col("blue", percent = 50, name = "lt.blue")
+
+Hist_CC8_pirate <- ggplot(CC8_pirate_vals, aes(x=vals, fill=Source)) + geom_histogram(alpha = 0.5, position = "identity", binwidth = 5, show.legend = FALSE) + scale_fill_manual(values = c("red", "blue")) + scale_color_manual(values = c("black", "black")) + theme_classic() + labs(x = "SNP Distances", y = "Frequency of Pairs") + geom_vline(xintercept = 35, color = "gray55", linetype = "dashed") + scale_x_continuous(breaks = seq(0, 7500, 100), lim = c(0, 750), expand = c(0,0)) + scale_y_continuous(breaks= seq(0,175,25), lim = c(0,175), expand = c(0,0))
+
+```
+
+```{r}
+
+#convert values to df
+CC8.aln.snippy.vals.df <- as.data.frame(CC8.aln.snippy.vals)
+total_to_CC8.snippy.vals.df <- as.data.frame(total_to_CC8.snippy.vals)
+
+CC8.aln.snippy.vals.df$Source <- "CC"
+CC8.aln.snippy.vals.df <- CC8.aln.snippy.vals.df %>% rename(vals = CC8.aln.snippy.vals)
+
+total_to_CC8.snippy.vals.df$Source <- "Total"
+total_to_CC8.snippy.vals.df <- total_to_CC8.snippy.vals.df %>% rename(vals = total_to_CC8.snippy.vals)
+
+#Tidy data
+CC8_snippy_vals <- rbind(total_to_CC8.snippy.vals.df, CC8.aln.snippy.vals.df)
+
+Hist_CC8_snippy <- ggplot(CC8_snippy_vals, aes(x=vals, fill=Source)) + geom_histogram(alpha = 0.5, position = "identity", binwidth = 5, show.legend = FALSE) + scale_fill_manual(values = c("red", "blue")) + scale_color_manual(values = c("black", "black")) + theme_classic() + labs(x = "SNP Distances", y = "Frequency of Pairs") + geom_vline(xintercept = 35, color = "gray55", linetype = "dashed") + scale_x_continuous(breaks = seq(0, 750, 100), lim = c(0, 750), expand = c(0,0)) + scale_y_continuous(breaks= seq(0,175,25), lim = c(0,175), expand = c(0,0))
+
+```
+
+
+```{r}
+
+#convert values to df
+CC5.aln.parsnip.vals.df <- as.data.frame(CC5.aln.parsnp.vals)
+total_to_CC5.parsnip.vals.df <- as.data.frame(total_to_CC5.parsnip.vals)
+
+CC5.aln.parsnip.vals.df$Source <- "CC"
+CC5.aln.parsnip.vals.df <- CC5.aln.parsnip.vals.df %>% rename(vals = CC5.aln.parsnp.vals)
+
+total_to_CC5.parsnip.vals.df$Source <- "Total"
+total_to_CC5.parsnip.vals.df <- total_to_CC5.parsnip.vals.df %>% rename(vals = total_to_CC5.parsnip.vals)
+
+#Tidy data
+CC5_parsnp_vals <- rbind(total_to_CC5.parsnip.vals.df, CC5.aln.parsnip.vals.df)
+
+Hist_CC5_parsnp <- ggplot(CC5_parsnp_vals, aes(x=vals, fill=Source)) + geom_histogram(alpha = 0.5, position = "identity", binwidth = 5, show.legend = FALSE) + scale_fill_manual(values = c("red", "blue")) + scale_color_manual(values = c("black", "black")) + theme_classic() + labs(x = "SNP Distances", y = "Frequency of Pairs") + geom_vline(xintercept = 35, color = "gray55", linetype = "dashed") + scale_x_continuous(breaks = seq(0, 900, 200), lim = c(0, 900), expand = c(0,0)) + scale_y_continuous(breaks= seq(0,25,5), lim = c(0,25), expand = c(0,0))
+
+
+```
+
+```{r}
+
+CC5.aln.pirate.vals.df <- as.data.frame(CC5.aln.pirate.vals)
+total_to_CC5.pirate.vals.df <- as.data.frame(total_to_CC5.pirate.vals)
+
+CC5.aln.pirate.vals.df$Source <- "CC"
+CC5.aln.pirate.vals.df <- CC5.aln.pirate.vals.df %>% rename(vals = CC5.aln.pirate.vals)
+
+total_to_CC5.pirate.vals.df$Source <- "Total"
+total_to_CC5.pirate.vals.df <- total_to_CC5.pirate.vals.df %>% rename(vals = total_to_CC5.pirate.vals)
+
+#Tidy data
+CC5_pirate_vals <- rbind(total_to_CC5.pirate.vals.df, CC5.aln.pirate.vals.df)
+
+Hist_CC5_pirate <- ggplot(CC5_pirate_vals, aes(x=vals, fill=Source)) + geom_histogram(alpha = 0.5, position = "identity", binwidth = 5, show.legend = FALSE) + scale_fill_manual(values = c("red", "blue")) + scale_color_manual(values = c("black", "black")) + theme_classic() + labs(x = "SNP Distances", y = "Frequency of Pairs") + geom_vline(xintercept = 35, color = "gray55", linetype = "dashed") + scale_x_continuous(breaks = seq(0, 900, 200), lim = c(0, 900), expand = c(0,0)) + scale_y_continuous(breaks= seq(0,25,5), lim = c(0,25), expand = c(0,0)) + theme( axis.line.x = element_line())
+
+##Need to find a way to draw in the axis line for y without that annoying X line
+
+```
+
+```{r}
+
+#convert values to df
+CC5.aln.snippy.vals.df <- as.data.frame(CC5.aln.snippy.vals)
+total_to_CC5.snippy.vals.df <- as.data.frame(total_to_CC5.snippy.vals)
+
+CC5.aln.snippy.vals.df$Source <- "CC"
+CC5.aln.snippy.vals.df <- CC5.aln.snippy.vals.df %>% rename(vals = CC5.aln.snippy.vals)
+
+total_to_CC5.snippy.vals.df$Source <- "Total"
+total_to_CC5.snippy.vals.df <- total_to_CC5.snippy.vals.df %>% rename(vals = total_to_CC5.snippy.vals)
+
+#Tidy data
+CC5_snippy_vals <- rbind(total_to_CC5.snippy.vals.df, CC5.aln.snippy.vals.df)
+
+Hist_CC5_snippy <- ggplot(CC5_snippy_vals, aes(x=vals, fill=Source)) + geom_histogram(alpha = 0.5, position = "identity", binwidth = 5, show.legend = FALSE) + scale_fill_manual(values = c("red", "blue")) + scale_color_manual(values = c("black", "black")) + theme_classic() + labs(x = "SNP Distances", y = "Frequency of Pairs") + geom_vline(xintercept = 35, color = "gray55", linetype = "dashed") + scale_x_continuous(breaks = seq(0, 900, 200), lim = c(0, 900), expand = c(0,0)) + scale_y_continuous(breaks= seq(0,25,5), lim = c(0,25), expand = c(0,0))
+
+```
+
+```{r}
+
+#Extracting the legend from one of the plots for a common legend
+l1 <- ggplot(CC5_parsnp_vals, aes(x=vals, fill=Source)) + geom_histogram(alpha = 0.5) +  scale_fill_manual(labels = c("Among CC","Among Total"), values = c("red", "blue")) + scale_color_manual(values = c("black", "black")) + guides(fill=guide_legend(title="Sequence \nAlignment"))
+
+#getting legend and adding a little space 
+legend <- get_legend(l1 + theme(legend.box.margin = margin(0, 0, 0, 12)))
+
+#Creating the grid of histograms
+xoff <- .35 # relative x position of label, within one plot
+yoff <- .93 # relative y position of label, within one plot
+
+Hist_grid <- plot_grid(Hist_CC8_pirate, Hist_CC8_parsnp, Hist_CC8_snippy, Hist_CC5_pirate, Hist_CC5_parsnp, Hist_CC5_snippy, nrow = 3, ncol = 2, byrow = FALSE, labels = "AUTO", label_size = 12) 
+
+
+#Need to improve the label alignments
+
+#+ draw_plot_label(label=c("A", "B", "C", "D","E", "F"),
+ #                          x=rep((xoff+0:2), 2),
+  # y=1-(1-yoff+rep((0:3),2)),
+    #                        hjust=.5, vjust=.5, size=12)
+
+#Creating a new grid of the histograms and legend
+HL_grid <- plot_grid(Hist_grid, legend, rel_widths = c(2, .4))
+
+
+title1 <- ggdraw() + draw_label("CC8", fontface = 'bold', x = 0, hjust = -4.5) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7)
+  )
+
+title2 <- ggdraw() + draw_label("CC5", fontface = 'bold', x = 0, hjust = -2) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7)
+  )
+
+
+Subtitles <- plot_grid(
+  title1, title2,
+  ncol = 2
+)
+
+HLS_grid <- plot_grid(
+  Subtitles, HL_grid,
+  ncol = 1,
+  # rel_heights values control vertical title margins
+  rel_heights = c(0.1, 1)
+)
+
+
+Parsnp_Label <- ggdraw() + draw_label("Assembly", fontface = 'bold', x = 0, hjust = .6, vjust = 2.5, angle = 90) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7)
+  )
+
+Pirate_Label <- ggdraw() + draw_label("Pangenome", fontface = 'bold', x = 0, hjust = .7, vjust = 2.5, angle = 90) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7))
+
+Snippy_Label <- ggdraw() + draw_label("Pseudoread", fontface = 'bold', x = 0, hjust = 0.40, vjust = 2.7, angle = 90) 
+
+Side_Labels <- plot_grid(
+  Pirate_Label, Parsnp_Label, Snippy_Label,
+  ncol = 1
+  # rel_heights values control vertical title margins
+)
+
+plot_grid(
+  Side_Labels, HLS_grid,
+  ncol = 2,
+  rel_widths = c(0.2, 3)
+)
+
+
+```
+
+#Figure 2
+```{r}
+
+library(cowplot)
+grid1 <- plot_grid(CC5_pirate_plot, CC8_pirate_plot, ncol=1)
+
+grid2 <- plot_grid(Context, grid1, rel_widths = c(0.5,1))
+
+grid2
+
+```
+
+# Patient Demographics
+## Summary 
+```{r}
+
+library(table1)
+
+
+isolates <- read.csv("/mnt/tiramisu/homes/bmtalbo-1000022/OneDrive/BREGOS_1/Isolates_7_21.csv", header = TRUE )
+isolates1 <- left_join(isolates, index, by = c("Isolate" = "name"))
+
+
+Epitable_sub <- Epitable %>% filter(`LabVantage ID` %in% bacteremia$SubjectID2) %>% filter(!(`LabVantage ID` %in% "MRSABB_00631")) %>% mutate(Hospital_mask = case_when(Hospital %in% "Hospital of the University of Pennsylvania" ~ "Hospital A", Hospital %in% "Penn Presbyterian" ~ "Hospital B", TRUE ~ "NA")) %>% mutate(Endo = case_when(IE %in% "Yes" & `IE Type` %in% "Native" ~ "Yes - Native valve", IE %in% "Yes" & `IE Type` %in% "Prosthetic" ~ "Yes - Prosthetic valve", TRUE ~ IE)) %>% mutate(Ethnicity = case_when(Ethnicity %in% "No" ~ "Non-Hsipanic/Latino", Ethnicity %in% "Yes" ~ "Hispanic/Latino", TRUE ~ Ethnicity)) %>% mutate(Cluster = case_when(`LabVantage ID` %in% isolates1$SubjectID2 ~ "Yes", TRUE ~ "No"))
+
+Epitable_sub <- left_join(Epitable_sub, bacteremia_meta[,c(3,22)], by = c(`LabVantage ID` = "SubjectID2"))
+
+Epitable_sub$Decade <- factor(Epitable_sub$Decade, levels=c("20-29", "30-39", "40-49","50-59","60-69","70-79","80-89","90-99","100-110"))
+
+pvalue <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    if (is.numeric(y)) {
+        # For numeric variables, perform a standard 2-sample t-test
+        p <- t.test(y ~ g)$p.value
+    } else {
+        # For categorical variables, perform a chi-squared test of independence
+        p <- fisher.test(table(y, g))$p.value
+    }
+    # Format the p-value, using an HTML entity for the less-than sign.
+    # The initial empty string places the output on the line below the variable label.
+    c("", sub("<", "&lt;", format.pval(p, digits=3, eps=0.001)))
+}
+
+label(Epitable_sub$Decade) <- "Age Group"
+label(Epitable_sub$Sex) <- "Sex"
+label(Epitable_sub$Race) <- "Race"
+label(Epitable_sub$Ethnicity) <- "Ethnicity"
+label(Epitable_sub$`BSI Source`) <- "Source of BSI"
+label(Epitable_sub$Hospital_mask) <- "Hospital Where BSI Diagnosed"
+label(Epitable_sub$`Death in Hospital`) <- "In-hospital Death"
+label(Epitable_sub$PBS) <- "Pitt Bacteremia Scale"
+label(Epitable_sub$Cluster) <- "Is patient in a Cluster"
+
+table1(~ Decade + Sex + Race + Ethnicity + `BSI Source` + Hospital_mask + PBS + `Death in Hospital`, data=Epitable_sub, topclass="Rtable1-zebra", output = "text", caption = "<h4><p style='text-align:left;'>Table 1. Patient demographics and clinical outcomes </h4></p>")
+
+table1(~ Decade + Sex + Race + Ethnicity + `BSI Source` + Hospital_mask + PBS + `Death in Hospital`| Cluster, overall = F, data=Epitable_sub, topclass="Rtable1-zebra", output = "text", caption = "<h4><p style='text-align:left;'>Table 1. Patient demographics and clinical outcomes by transmission cluster status</h4></p>", footnote = "<p style='text-align:left;'>*P-values reflect results of two-tailed T-test or Fisher's Exact test </p>")
+
+mean(Epitable$Age)
+sd(Epitable$Age)
