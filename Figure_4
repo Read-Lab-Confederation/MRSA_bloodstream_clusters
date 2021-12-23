@@ -1,0 +1,287 @@
+
+
+###Figure 4######
+###Finding Cluster Combinations####
+
+Hosp <- read.csv("/home/bmtalbo/tiramisu/OneDrive/BREGOS_1/BREGOS_Clusters_PLUSHOSP.csv", header = TRUE, na.strings = "")
+Hosp <- Hosp %>% select(-X, -X.1) %>% mutate(BaseCluster = str_sub(Clusters, 1,2))
+Hosp <- Hosp[rowSums(is.na(Hosp)) != ncol(Hosp), ] 
+
+Cluster1 <- Hosp %>% filter(BaseCluster %in% "C1") %>% select(SAB_ID,BaseCluster,Hospital.number,start.of.obs.to.admission, start.of.obs.to.discharge, duration.of.admission, Admission_Num)
+
+#### CLUSTER PAIRS ####
+
+patient1 <- c("MRSABB_00055",
+              "MRSABB_00055",
+              "MRSABB_00369",
+              "MRSABB_00077",
+              "MRSABB_00097",
+              "MRSABB_00097",
+              "MRSABB_00097",
+              "MRSABB_00097",
+              "MRSABB_00896",
+              "MRSABB_00896",
+              "MRSABB_00896",
+              "MRSABB_00368",
+              "MRSABB_00368",
+              "MRSABB_00793",
+              "MRSABB_00220",
+              "MRSABB_00231",
+              "MRSABB_00231",
+              "MRSABB_00231",
+              "MRSABB_01096",
+              "MRSABB_01096",
+              "MRSABB_00571",
+              "MRSABB_00442",
+              "MRSABB_00442",
+              "MRSABB_00442",
+              "MRSABB_00442",
+              "MRSABB_00442",
+              "MRSABB_00665",
+              "MRSABB_00665",
+              "MRSABB_00665",
+              "MRSABB_00665",
+              "MRSABB_00486",
+              "MRSABB_00486",
+              "MRSABB_00486",
+              "MRSABB_00704",
+              "MRSABB_00704",
+              "MRSABB_00277",
+              "MRSABB_00594",
+              "MRSABB_00594",
+              "MRSABB_00703",
+              "MRSABB_00741",
+              "MRSABB_00797")
+patient2 <- c('MRSABB_00369',
+              'MRSABB_00963',
+              'MRSABB_00963',
+              'MRSABB_00249',
+              'MRSABB_00896',
+              'MRSABB_00368',
+              'MRSABB_00793',
+              'MRSABB_00916',
+              'MRSABB_00368',
+              'MRSABB_00793',
+              'MRSABB_00916',
+              'MRSABB_00793',
+              'MRSABB_00916',
+              'MRSABB_00916',
+              'MRSABB_00894',
+              'MRSABB_01096',
+              'MRSABB_00571',
+              'MRSABB_00886',
+              'MRSABB_00571',
+              'MRSABB_00886',
+              'MRSABB_00886',
+              'MRSABB_00665',
+              'MRSABB_00486',
+              'MRSABB_00704',
+              'MRSABB_00277',
+              'MRSABB_00390',
+              'MRSABB_00486',
+              'MRSABB_00704',
+              'MRSABB_00277',
+              'MRSABB_00390',
+              'MRSABB_00704',
+              'MRSABB_00277',
+              'MRSABB_00390',
+              'MRSABB_00277',
+              'MRSABB_00390',
+              'MRSABB_00390',
+              'MRSABB_00703',
+              'MRSABB_00967',
+              'MRSABB_00967',
+              'MRSABB_00888',
+              'MRSABB_01048')
+pairol<- c(1,0,1,1,0,0,0,0,0,0,0,1,0,0,0,0,0,1,1,1,0,0,0,1,0,0,1,0,0,1,0,0,1,1,0,0,0,0,0,1,0)
+unitol<- as.numeric(c(1,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,0,0,1,0,0,0,1,0,0,0,0,0,1,0))
+clusternames <- c("C1","C1","C1","C2","C3","C3","C3","C3","C3","C3","C3","C3","C3","C3","C4","C5","C5","C5","C5","C5","C5",
+                  "C6","C6","C6","C6","C6","C6","C6","C6","C6","C6","C6","C6","C6","C6","C6","C7","C7","C7","C8","C9")
+
+
+Clusterpairs <- as.data.frame(cbind(patient1,patient2,pairol,unitol, clusternames))
+Clusterpairs2 <- left_join(Clusterpairs,index, by = c("patient1" = "SubjectID2")) %>% select(patient1,patient2, pairol, unitol,clusternames,name)
+Clusterpairs2 <- left_join(Clusterpairs2,index, by = c("patient2" = "SubjectID2")) %>% 
+  mutate(Strain1 = name.x) %>% 
+  mutate(Strain2 = name.y ) %>%
+  select(Strain1,Strain2,patient1,patient2, pairol, unitol,clusternames)
+  
+Clusterpairs3 <- left_join(Clusterpairs2,melted_snippy, by = c("Strain1","Strain2")) %>% 
+  select(Strain1, Strain2, pairol,unitol,SNPdist) %>%
+  mutate(SNPdist = as.character(SNPdist)) %>%
+  mutate(SNPdist2 = case_when(Strain1 %in% "S.190725.00120" & Strain2 %in% "S.190723.00179" ~ "38",
+                   Strain1 %in% "S.190725.00120" & Strain2 %in% "S.190725.00107" ~ "33",
+                    Strain1 %in% "S.190731.00848"  & Strain2 %in% "S.190725.00090" ~ "29" , 
+                   Strain1 %in% "S.190731.00848" & Strain2 %in% "S.190725.00117" ~ "35",
+                   Strain1 %in% "S.190723.00185" & Strain2 %in% "S.190723.00174" ~ "38",
+                   Strain1 %in% "S.190723.00185" & Strain2 %in% "S.190723.00181" ~ "29",
+                   Strain1 %in% "S.190725.00093" & Strain2 %in% "S.190723.00191" ~ "27",
+                   Strain1 %in% "S.190725.00093" & Strain2 %in% "S.190723.00174" ~ "29",
+                   Strain1 %in% "S.190725.00093" & Strain2 %in% "S.190723.00181" ~ "20",
+                   Strain1 %in% "S.190723.00191" & Strain2 %in% "S.190723.00174" ~ "24",
+                   Strain1 %in% "S.190723.00191" & Strain2 %in% "S.190723.00181" ~ "15",
+                    Strain1 %in% "S.190725.00099" & Strain2 %in% "S.190723.00181" ~ "21",
+                   Strain1 %in% "S.190725.00099" & Strain2 %in% "S.190723.00174" ~ "30",
+                   TRUE ~ SNPdist)) %>%
+  mutate(SNPdist2 = as.numeric(SNPdist2)) %>% 
+  mutate(pairol = as.numeric(pairol)) %>% 
+  mutate(unitol = as.numeric(unitol)) %>% select(-SNPdist) %>%
+  left_join(times, by = c("Strain1" = "name")) %>%
+  left_join(times, by = c("Strain2" = "name")) %>%
+  mutate(time1 = as.Date(time_collected.x, "%m/%d/%Y")) %>%
+  mutate(time2 = as.Date(time_collected.y, "%m/%d/%Y")) %>%
+  mutate(datediff = as.numeric(abs(time1-time2)))
+
+mylogit <- glm(pairol ~ SNPdist2, data = Clusterpairs3, family = "binomial")
+mylogitmod <- glm(pairol ~ SNPdist2 + datediff , data = Clusterpairs3, family = "binomial")
+
+summary(mylogit)
+summary(mylogitmod)
+
+newdata <- data.frame(SNPdist2=seq(min(Clusterpairs3$SNPdist2),max(Clusterpairs3$SNPdist2),len=50))
+
+#use fitted model to predict values of vs
+newdata$pairol = predict(mylogit, newdata, type="response")
+
+##########
+
+
+##########
+
+## grad the inverse link function
+ilink <- family(mylogitmod)$linkinv
+## add fit and se.fit on the **link** scale
+confidentdata <- bind_cols(newdata, setNames(as_tibble(predict(mylogitmod, newdata, se.fit = TRUE)[1:2]),
+                                   c('fit_link','se_link')))
+## create the interval and backtransform
+confidentdata<- mutate(confidentdata,
+                fit_resp  = ilink(fit_link),
+                right_upr = ilink(fit_link + (2 * se_link)),
+                right_lwr = ilink(fit_link - (2 * se_link)))
+## show
+confidentdata
+
+#Plot
+library(ggplot2)
+plt <- ggplot(confidentdata, aes(x = SNPdist2, y = pairol)) +
+  geom_line() 
+
+plt + geom_ribbon(data = confidentdata,
+                    aes(ymin = right_lwr, ymax = right_upr),
+                    alpha = 0.1) +
+      geom_point(data = Clusterpairs3, aes(y=pairol,x=SNPdist2, color=clusternames, shape = as.factor(unitol)), size = 3) +
+  theme_classic() +
+  labs(title = "Probability of a Hospital Overlap in Space and time", x = "Pairwise SNP Distance", y = "Probability Overlap", 
+       shape = "Overlap in the same unit?", color = "Cluster") + 
+    scale_shape_manual(values = c(1, 16)) +
+    scale_color_brewer(palette = "Set1")
+
+########Unmodified##########
+
+
+newdata2 <- data.frame(SNPdist2=seq(min(Clusterpairs3$SNPdist2),max(Clusterpairs3$SNPdist2),len=50))
+
+#use fitted model to predict values of vs
+newdata2$pairol = predict(mylogit, newdata, type="response")
+
+## grad the inverse link function
+ilink2 <- family(mylogit)$linkinv
+## add fit and se.fit on the **link** scale
+confidentdata2 <- bind_cols(newdata2, setNames(as_tibble(predict(mylogit, newdata2, se.fit = TRUE)[1:2]),
+                                             c('fit_link','se_link')))
+## create the interval and backtransform
+confidentdata2<- mutate(confidentdata2,
+                       fit_resp  = ilink(fit_link),
+                       right_upr = ilink(fit_link + (2 * se_link)),
+                       right_lwr = ilink(fit_link - (2 * se_link)))
+Clusterpairs3$unitol <- as.factor(Clusterpairs3$unitol)
+
+
+library(ggplot2)
+plt2 <- ggplot(confidentdata2, aes(x = SNPdist2, y = pairol)) +
+  geom_line() 
+
+Logistic_plt <- plt2 + geom_ribbon(data = confidentdata2,
+                  aes(ymin = right_lwr, ymax = right_upr),
+                  alpha = 0.1) +
+  geom_point(data = Clusterpairs3, aes(y=pairol,x=SNPdist2, color=unitol), size = 3) +
+  theme_classic() +
+  labs(title = "Probability patient pairs\nhave hospitalization overlaps", x = "Pairwise SNP Distance", 
+       y = "Probability", 
+       color = "Shared hospital unit") + 
+  scale_color_manual(labels  = c("No", "Yes"),  values = c("gray80","black")) + 
+  theme(legend.position = c(0.75,0.75), plot.title = element_text(hjust = 0.5, size = 16), 
+        axis.text = element_text(size = 12), axis.title = element_text(size = 14), 
+        legend.text = element_text(size = 12), legend.title = element_text(size = 10)) +
+  ggplot2::geom_text(aes(x = 8, y = 0.20, label = "\u03B2\u2080 = 0.88604 \n\u03B2\u2081 = -0.06517"))
+
+Logistic_plt
+
+
+predict(mylogit,confidentdata2, type="response")
+
+
+###### ROC Curve #######
+
+library(yardstick)
+library(broom)
+library(gtsummary)
+
+#GLM plus statistics for fit
+
+logitsum <- glm(pairol ~ SNPdist2, data = Clusterpairs3, family = "binomial")
+summary(logitsum)
+tbl_regression(logitsum, exponentiate = TRUE)
+
+
+#Calculating the AUC for the ROC curve
+
+AUC <- glm(pairol ~ SNPdist2, data = Clusterpairs3, family = "binomial") %>%
+  augment() %>% mutate(pairol = as.factor(pairol)) %>% roc_auc(event_level = 'second', truth = pairol, estimate = .fitted)
+
+mylogit <- glm(pairol ~ SNPdist2, data = Clusterpairs3, family = "binomial") %>%
+  augment() %>% mutate(mod = "unmod")
+mylogit$pairol <- as.factor(mylogit$pairol)
+
+mylogit_model <- glm(pairol ~ SNPdist2, data = Clusterpairs3, family = "binomial")
+
+p <- .50
+b0 <- .88604
+b1 <- -0.06517
+(log(p/(1-p)) - b0)/b1
+
+
+logit_out<- mylogit %>%
+  roc_curve(event_level = 'second', truth = pairol, .fitted) %>% ggplot(
+    aes(
+      x = 1 - specificity, 
+      y = sensitivity)) + geom_line(color = "darkblue") + theme_classic() +
+  geom_abline(slope = 1, intercept = 0, size = 0.4, linetype = 3) +
+  labs(title = "ROC Curve") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  geom_text(aes(x = 0, y = 1, label = "AUC = 0.662"), nudge_x = 0.15, size = 6) +
+  theme(plot.title = element_text(size = 16), axis.text = element_text(size = 12), 
+        axis.title = element_text(size = 14 ))
+
+logit_out
+
+# #Cross <- mylogit %>% roc_curve(event_level = 'second', truth = pairol, .fitted) %>% 
+#  # ggplot(aes(x = .threshold)) +
+#   geom_line(aes(y=sensitivity)) + 
+#   geom_line( aes(y=specificity)) +
+#   scale_y_continuous(
+#     
+#     # Features of the first axis
+#     name = "First Axis",
+#     
+#     # Add a second axis and specify its features
+#     sec.axis = sec_axis(~., name="Second Axis")
+#   )
+# 
+# Cross
+
+
+library(cowplot)
+
+plot_grid(Logistic_plt,logit_out, labels = c('A','B'), label_size = 16)
+
